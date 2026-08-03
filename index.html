@@ -321,17 +321,31 @@ function isSameDay(dateStr, ref) {
  
 function todayStats() {
   const today = new Date();
-  const of = ventasHistoricas.filter((v) => isSameDay(v.created_at, today));
-  const total = of.reduce((s, v) => s + Number(v.total), 0);
-  const ganancia = of.reduce((s, v) => {
-    const g = (v.venta_items || []).reduce((si, it) => si + it.subtotal, 0);
-    return s + g;
-  }, 0);
-  const gananciaReal = of.reduce((s, v) => {
-    const g = (v.venta_items || []).reduce((si, it) => si + (it.subtotal - it.costo_unitario * it.cantidad), 0);
-    return s + g;
-  }, 0);
-  return { total, ganancia, gananciaReal };
+ 
+  // Ventas al contado de hoy: cuentan de una como ganancia
+  const ventasContadoHoy = ventasHistoricas.filter((v) => isSameDay(v.created_at, today) && !v.es_fiado);
+  let ganancia = ventasContadoHoy.reduce((s, v) => s + (v.venta_items || []).reduce((si, it) => si + it.subtotal, 0), 0);
+  let gananciaReal = ventasContadoHoy.reduce((s, v) => s + (v.venta_items || []).reduce((si, it) => si + (it.subtotal - it.costo_unitario * it.cantidad), 0), 0);
+ 
+  // Cobros de fiado recibidos hoy: recién ahí entran como ganancia (no antes)
+  const cobrosHoy = cobros.filter((c) => isSameDay(c.created_at, today));
+  cobrosHoy.forEach((c) => {
+    ganancia += Number(c.monto);
+    const venta = ventasHistoricas.find((v) => v.id === c.venta_id);
+    if (venta && venta.total > 0) {
+      const costoTotal = (venta.venta_items || []).reduce((s, it) => s + it.costo_unitario * it.cantidad, 0);
+      const proporcionGanancia = (venta.total - costoTotal) / venta.total;
+      gananciaReal += Number(c.monto) * proporcionGanancia;
+    } else {
+      gananciaReal += Number(c.monto);
+    }
+  });
+ 
+  return { ganancia, gananciaReal };
+}
+ 
+function weekTotal() {
+  return last7DaysChartData().totals.reduce((s, t) => s + t, 0);
 }
  
 function last7DaysChartData() {
@@ -387,7 +401,8 @@ function render() {
 }
  
 function renderDashboard(content) {
-  const { total, ganancia, gananciaReal } = todayStats();
+  const { ganancia, gananciaReal } = todayStats();
+  const ventasSemana = weekTotal();
   const lowStock = productos.filter((p) => !p.es_insumo && p.nombre !== "Helado · Bola" && p.nombre !== "Helado · Pote 1/4" && p.stock <= p.stock_minimo);
   const recientes = ventasHistoricas.slice(0, 4);
  
@@ -395,8 +410,8 @@ function renderDashboard(content) {
     <div class="space-y-5">
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
-          <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Ventas de hoy</p>
-          <p class="font-mono-num text-[19px] font-semibold text-[#241C2E]">${fmt(total)}</p>
+          <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Ventas de la semana</p>
+          <p class="font-mono-num text-[19px] font-semibold text-[#241C2E]">${fmt(ventasSemana)}</p>
         </div>
         <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
           <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Ganancia de hoy</p>
@@ -586,7 +601,7 @@ function cambiarVistaInventario(vista) {
   render();
 }
  
-function irA(tab) { activeTab = tab; render(); }
+async function irA(tab) { activeTab = tab; await loadAll(); }
  
 // ---------- Proveedores ----------
 function renderProveedores(content) {
@@ -1572,7 +1587,7 @@ document.getElementById("modal-overlay").addEventListener("click", (e) => {
  
 // ---------- Navegación ----------
 document.querySelectorAll(".tab-btn").forEach((btn) => {
-  btn.addEventListener("click", () => { activeTab = btn.dataset.tab; render(); });
+  btn.addEventListener("click", async () => { activeTab = btn.dataset.tab; await loadAll(); });
 });
 document.getElementById("add-product-fab").addEventListener("click", openNewProduct);
  
