@@ -108,6 +108,7 @@ let promociones = [];
 let usuarios = [];
 let ventasHistoricas = [];
 let cart = {};
+let heladoCart = []; // ventas armadas de helado: { id, tipo: 'bola'|'pote14', bolas: [productoId,...], envaseId, cobertura, total }
 let activeTab = "dashboard";
 let chartInstance = null;
 let categoryColors = {};
@@ -191,8 +192,20 @@ async function loadVentas() {
  
 // ---------- Utilidades ----------
 function ventasVisibles() {
-  // Productos que se pueden vender ahora: no insumos, no de la categoría Helados (próxima etapa)
   return productos.filter((p) => !p.es_insumo && p.categorias?.nombre !== HELADOS_OCULTO);
+}
+ 
+function baldesHelado() {
+  return productos.filter((p) => p.producto_base === "Balde Helado" && p.es_insumo);
+}
+function insumoPorNombre(nombre) {
+  return productos.find((p) => p.nombre === nombre && p.es_insumo);
+}
+function productoHeladoBola() {
+  return productos.find((p) => p.nombre === "Helado · Bola");
+}
+function productoHeladoPote() {
+  return productos.find((p) => p.nombre === "Helado · Pote 1/4");
 }
  
 function promoDe(productoId) {
@@ -346,7 +359,7 @@ function renderDashboard(content) {
  
 function renderVender(content) {
   const grupos = agruparPorCategoria(ventasVisibles());
-  content.innerHTML = Object.entries(grupos).map(([cat, lista]) => `
+  let html = Object.entries(grupos).map(([cat, lista]) => `
     <div class="mb-5">
       ${sectionLabel(cat)}
       <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -375,6 +388,43 @@ function renderVender(content) {
       </div>
     </div>
   `).join("");
+ 
+  const bola = productoHeladoBola();
+  const pote = productoHeladoPote();
+  if (bola || pote) {
+    html += `
+    <div class="mb-5">
+      ${sectionLabel("Helados")}
+      <div class="grid grid-cols-2 gap-3 mb-3">
+        ${bola ? `
+        <button onclick="openHeladoBuilder('bola')" class="bg-white rounded-2xl p-3.5 shadow-sm border border-black/[0.04] text-left">
+          <p class="text-[13px] font-semibold text-[#241C2E]">Helado · Bola</p>
+          <p class="font-mono-num text-[13px] text-[#6B2D5C] font-semibold mt-1">${fmt(bola.precio_venta)} c/u</p>
+          <p class="text-[10px] text-[#8a7d94] mt-1">Tocá para armar</p>
+        </button>` : ""}
+        ${pote ? `
+        <button onclick="openHeladoBuilder('pote14')" class="bg-white rounded-2xl p-3.5 shadow-sm border border-black/[0.04] text-left">
+          <p class="text-[13px] font-semibold text-[#241C2E]">Helado · Pote 1/4</p>
+          <p class="font-mono-num text-[13px] text-[#6B2D5C] font-semibold mt-1">${fmt(pote.precio_venta)}</p>
+          <p class="text-[10px] text-[#8a7d94] mt-1">Tocá para armar</p>
+        </button>` : ""}
+      </div>
+      ${heladoCart.length ? `
+      <div class="space-y-2">
+        ${heladoCart.map((h) => `
+          <div class="bg-white rounded-xl px-3.5 py-2.5 shadow-sm border border-black/[0.04] flex items-center justify-between">
+            <p class="text-[12px] text-[#241C2E] flex-1 pr-2">${h.resumen}</p>
+            <div class="flex items-center gap-2 shrink-0">
+              <span class="font-mono-num text-[12px] font-semibold">${fmt(h.total)}</span>
+              <button onclick="quitarHeladoCart('${h.id}')" class="text-[#D64545] text-[16px] leading-none">×</button>
+            </div>
+          </div>
+        `).join("")}
+      </div>` : ""}
+    </div>`;
+  }
+ 
+  content.innerHTML = html;
 }
  
 function renderInventario(content) {
@@ -412,16 +462,20 @@ function renderInventario(content) {
 function renderCartBar() {
   const bar = document.getElementById("cart-bar");
   const items = Object.entries(cart).filter(([, q]) => q > 0);
-  if (activeTab !== "vender" || items.length === 0) { bar.classList.add("screen-hidden"); return; }
-  const total = items.reduce((s, [id, q]) => {
+  const hayHelados = heladoCart.length > 0;
+  if (activeTab !== "vender" || (items.length === 0 && !hayHelados)) { bar.classList.add("screen-hidden"); return; }
+  const totalNormal = items.reduce((s, [id, q]) => {
     const p = productos.find((pr) => pr.id === Number(id));
     return s + (p ? calcularLinea(p, q).subtotal : 0);
   }, 0);
+  const totalHelados = heladoCart.reduce((s, h) => s + h.total, 0);
+  const total = totalNormal + totalHelados;
+  const cantidadItems = items.length + heladoCart.length;
   bar.classList.remove("screen-hidden");
   bar.innerHTML = `
     <div class="flex items-center justify-between">
       <div>
-        <p class="text-white/60 text-[11px]">${items.length} producto(s)</p>
+        <p class="text-white/60 text-[11px]">${cantidadItems} producto(s)</p>
         <p class="text-white font-mono-num text-[16px] font-semibold">${fmt(total)}</p>
       </div>
       <button onclick="openConfirmSale()" class="bg-[#2F9E7A] text-white text-[13px] font-semibold px-4 py-2.5 rounded-xl">
@@ -429,6 +483,131 @@ function renderCartBar() {
       </button>
     </div>
   `;
+}
+ 
+// ---------- Armado de Helados ----------
+window.__heladoBuilder = null; // estado temporal mientras se arma un helado
+ 
+function openHeladoBuilder(tipo) {
+  const baldes = baldesHelado();
+  if (baldes.length === 0) { alert("Primero cargá al menos un sabor de balde de helado en Inventario."); return; }
+  const cantidadFija = tipo === "pote14" ? Math.round(productoHeladoPote()?.equivalencia_bolas || 4) : 1;
+  window.__heladoBuilder = {
+    tipo,
+    bolas: Array(cantidadFija).fill(baldes[0].id),
+    envaseId: tipo === "bola" ? insumoPorNombre("Vasito")?.id : null,
+    cobertura: false,
+  };
+  renderHeladoBuilderModal();
+}
+ 
+function renderHeladoBuilderModal() {
+  const st = window.__heladoBuilder;
+  const baldes = baldesHelado();
+  const producto = st.tipo === "bola" ? productoHeladoBola() : productoHeladoPote();
+  const opcionesSabor = baldes.map((b) => `<option value="${b.id}">${b.presentacion || b.nombre}</option>`).join("");
+  const vasito = insumoPorNombre("Vasito");
+  const cucurucho = insumoPorNombre("Cucurucho");
+ 
+  const bolasHtml = st.bolas.map((saborId, i) => `
+    <div class="flex items-center justify-between gap-2 mb-2">
+      <span class="text-[12px] text-[#8a7d94] w-16">Bola ${i + 1}</span>
+      <select onchange="cambiarSaborBola(${i}, this.value)" class="flex-1 bg-[#F7F3FA] rounded-lg px-2 py-2 text-[13px] outline-none">
+        ${baldes.map((b) => `<option value="${b.id}" ${b.id===saborId?"selected":""}>${b.presentacion || b.nombre}</option>`).join("")}
+      </select>
+    </div>
+  `).join("");
+ 
+  const total = st.tipo === "bola" ? (producto?.precio_venta || 0) * st.bolas.length : (producto?.precio_venta || 0);
+ 
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">${st.tipo === "bola" ? "Armar Vasito / Cucurucho" : "Armar Pote 1/4"}</p>
+ 
+    ${st.tipo === "bola" ? `
+    <div class="flex items-center justify-between mb-4">
+      <span class="text-[12px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cantidad de bolas</span>
+      <div class="flex items-center gap-3">
+        <button onclick="cambiarCantidadBolas(-1)" class="w-8 h-8 rounded-full bg-[#F7F3FA] flex items-center justify-center">−</button>
+        <span class="font-mono-num text-[16px] font-semibold w-6 text-center">${st.bolas.length}</span>
+        <button onclick="cambiarCantidadBolas(1)" class="w-8 h-8 rounded-full bg-[#6B2D5C] text-white flex items-center justify-center">+</button>
+      </div>
+    </div>` : `<p class="text-[12px] text-[#8a7d94] mb-3">Este pote lleva ${st.bolas.length} bolas fijas.</p>`}
+ 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Sabor de cada bola</label>
+    <div class="mt-2 mb-4">${bolasHtml}</div>
+ 
+    ${st.tipo === "bola" ? `
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Envase</label>
+    <div class="grid grid-cols-2 gap-2 mt-1 mb-4">
+      ${vasito ? `<button type="button" onclick="elegirEnvase(${vasito.id}, this)" class="envase-btn border border-black/10 rounded-xl py-2 text-[13px] font-medium ${st.envaseId===vasito.id?"bg-[#6B2D5C] text-white":""}">Vasito</button>` : ""}
+      ${cucurucho ? `<button type="button" onclick="elegirEnvase(${cucurucho.id}, this)" class="envase-btn border border-black/10 rounded-xl py-2 text-[13px] font-medium ${st.envaseId===cucurucho.id?"bg-[#6B2D5C] text-white":""}">Cucurucho</button>` : ""}
+    </div>` : ""}
+ 
+    <label class="flex items-center gap-2 mb-5">
+      <input type="checkbox" id="cobertura-check" ${st.cobertura ? "checked" : ""} onchange="toggleCobertura(this.checked)" class="w-4 h-4" />
+      <span class="text-[13px] text-[#241C2E]">Con cobertura (sin costo extra)</span>
+    </label>
+ 
+    <div class="flex items-center justify-between mb-4">
+      <span class="text-[12px] text-[#8a7d94]">Total</span>
+      <span class="font-mono-num text-[18px] font-semibold text-[#241C2E]">${fmt(total)}</span>
+    </div>
+ 
+    <button onclick="agregarHeladoAlCarrito()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Agregar al carrito</button>
+  `);
+}
+ 
+function cambiarCantidadBolas(delta) {
+  const st = window.__heladoBuilder;
+  const nueva = Math.max(1, st.bolas.length + delta);
+  if (delta > 0) st.bolas.push(baldesHelado()[0]?.id);
+  else st.bolas = st.bolas.slice(0, nueva);
+  renderHeladoBuilderModal();
+}
+function cambiarSaborBola(index, value) {
+  window.__heladoBuilder.bolas[index] = Number(value);
+}
+function elegirEnvase(id, btn) {
+  window.__heladoBuilder.envaseId = id;
+  document.querySelectorAll(".envase-btn").forEach((b) => b.classList.remove("bg-[#6B2D5C]", "text-white"));
+  btn.classList.add("bg-[#6B2D5C]", "text-white");
+}
+function toggleCobertura(checked) {
+  window.__heladoBuilder.cobertura = checked;
+}
+ 
+function agregarHeladoAlCarrito() {
+  const st = window.__heladoBuilder;
+  if (st.tipo === "bola" && !st.envaseId) { alert("Elegí un envase (vasito o cucurucho)."); return; }
+ 
+  const producto = st.tipo === "bola" ? productoHeladoBola() : productoHeladoPote();
+  const total = st.tipo === "bola" ? producto.precio_venta * st.bolas.length : producto.precio_venta;
+  const nombresSabor = st.bolas.map((id) => {
+    const b = productos.find((p) => p.id === id);
+    return b?.presentacion || b?.nombre || "?";
+  });
+  const envaseNombre = st.envaseId ? productos.find((p) => p.id === st.envaseId)?.nombre : "Pote 1/4";
+  const resumen = `${envaseNombre} · ${st.bolas.length} bola(s): ${nombresSabor.join(", ")}${st.cobertura ? " · con cobertura" : ""}`;
+ 
+  heladoCart.push({
+    id: `h${Date.now()}`,
+    tipo: st.tipo,
+    productoId: producto.id,
+    bolas: [...st.bolas],
+    envaseId: st.envaseId,
+    cobertura: st.cobertura,
+    total,
+    resumen,
+  });
+ 
+  window.__heladoBuilder = null;
+  closeModal();
+  render();
+}
+ 
+function quitarHeladoCart(id) {
+  heladoCart = heladoCart.filter((h) => h.id !== id);
+  render();
 }
  
 // ---------- Acciones de venta ----------
@@ -441,10 +620,12 @@ function changeQty(id, delta) {
  
 function openConfirmSale() {
   const items = Object.entries(cart).filter(([, q]) => q > 0);
-  const total = items.reduce((s, [id, q]) => {
+  const totalNormal = items.reduce((s, [id, q]) => {
     const p = productos.find((pr) => pr.id === Number(id));
     return s + calcularLinea(p, q).subtotal;
   }, 0);
+  const totalHelados = heladoCart.reduce((s, h) => s + h.total, 0);
+  const total = totalNormal + totalHelados;
   const opciones = usuarios.map((u) => `<option value="${u.nombre}">${u.nombre}</option>`).join("");
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Confirmar venta</p>
@@ -476,7 +657,7 @@ function selectPago(medio, btn) {
  
 async function confirmSale() {
   const items = Object.entries(cart).filter(([, q]) => q > 0);
-  if (items.length === 0) return;
+  if (items.length === 0 && heladoCart.length === 0) return;
  
   const registrado_por = document.getElementById("registrado-por").value;
   const medio_pago = window.__medioPago || "efectivo";
@@ -489,6 +670,15 @@ async function confirmSale() {
     descuentoTotal += descuento;
     return { producto_id: p.id, cantidad: qty, precio_unitario: p.precio_venta, costo_unitario: p.costo_ultimo, descuento, subtotal };
   });
+ 
+  // Líneas de helados armados
+  heladoCart.forEach((h) => {
+    const producto = productos.find((p) => p.id === h.productoId);
+    const cantidad = h.tipo === "bola" ? h.bolas.length : 1;
+    subtotalTotal += h.total;
+    lineas.push({ producto_id: producto.id, cantidad, precio_unitario: producto.precio_venta, costo_unitario: producto.costo_ultimo, descuento: 0, subtotal: h.total });
+  });
+ 
   const total = subtotalTotal - descuentoTotal;
  
   const { data: venta, error: ventaError } = await sb
@@ -500,12 +690,43 @@ async function confirmSale() {
   const itemsToInsert = lineas.map((l) => ({ ...l, venta_id: venta.id }));
   await sb.from("venta_items").insert(itemsToInsert);
  
+  // Descontar stock de productos normales
   for (const [id, qty] of items) {
     const p = productos.find((pr) => pr.id === Number(id));
     await sb.from("productos").update({ stock: p.stock - qty }).eq("id", p.id);
   }
  
+  // Descontar insumos de cada helado armado
+  const cucharita = insumoPorNombre("Cucharita");
+  const servilleta = insumoPorNombre("Servilleta");
+  const cobertura = insumoPorNombre("Cobertura");
+  const poteIsopor = insumoPorNombre("Pote de Isopor 1/4");
+ 
+  for (const h of heladoCart) {
+    // Descontar cada bola del balde de su sabor
+    const conteoPorSabor = {};
+    h.bolas.forEach((id) => (conteoPorSabor[id] = (conteoPorSabor[id] || 0) + 1));
+    for (const [saborId, cant] of Object.entries(conteoPorSabor)) {
+      const balde = productos.find((p) => p.id === Number(saborId));
+      if (balde) await sb.from("productos").update({ stock: balde.stock - cant }).eq("id", balde.id);
+    }
+    // Envase
+    if (h.tipo === "bola" && h.envaseId) {
+      const envase = productos.find((p) => p.id === h.envaseId);
+      if (envase) await sb.from("productos").update({ stock: envase.stock - 1 }).eq("id", envase.id);
+    }
+    if (h.tipo === "pote14" && poteIsopor) {
+      await sb.from("productos").update({ stock: poteIsopor.stock - 1 }).eq("id", poteIsopor.id);
+    }
+    // Cucharita y servilleta (una por venta armada)
+    if (cucharita) await sb.from("productos").update({ stock: cucharita.stock - 1 }).eq("id", cucharita.id);
+    if (servilleta) await sb.from("productos").update({ stock: servilleta.stock - 1 }).eq("id", servilleta.id);
+    // Cobertura si se eligió
+    if (h.cobertura && cobertura) await sb.from("productos").update({ stock: cobertura.stock - 1 }).eq("id", cobertura.id);
+  }
+ 
   cart = {};
+  heladoCart = [];
   closeModal();
   activeTab = "dashboard";
   await loadAll();
