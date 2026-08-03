@@ -83,6 +83,10 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8V21H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>
         <span class="text-[10px]">Inventario</span>
       </button>
+      <button class="tab-btn flex flex-col items-center gap-1 py-1 px-3" data-tab="mas">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
+        <span class="text-[10px]">Más</span>
+      </button>
     </div>
     <div class="w-32 h-1 bg-[#241C2E]/15 rounded-full mx-auto mt-2.5"></div>
   </div>
@@ -107,6 +111,9 @@ let productos = [];
 let promociones = [];
 let usuarios = [];
 let ventasHistoricas = [];
+let proveedores = [];
+let compras = [];
+let gastos = [];
 let cart = {};
 let heladoCart = []; // ventas armadas de helado: { id, tipo: 'bola'|'pote14', bolas: [productoId,...], envaseId, cobertura, total }
 let activeTab = "dashboard";
@@ -147,8 +154,30 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
  
 // ---------- Carga de datos ----------
 async function loadAll() {
-  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas()]);
+  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras(), loadGastos()]);
   render();
+}
+ 
+async function loadProveedores() {
+  const { data, error } = await sb.from("proveedores").select("*").order("nombre");
+  if (error) { console.error(error); return; }
+  proveedores = data;
+}
+ 
+async function loadCompras() {
+  const { data, error } = await sb
+    .from("compras")
+    .select("id, tipo, total, comprobante_url, registrado_por, created_at, proveedores(nombre), compra_items(cantidad, costo_unitario, productos(nombre))")
+    .order("created_at", { ascending: false })
+    .limit(30);
+  if (error) { console.error(error); return; }
+  compras = data;
+}
+ 
+async function loadGastos() {
+  const { data, error } = await sb.from("gastos").select("*").order("created_at", { ascending: false }).limit(30);
+  if (error) { console.error(error); return; }
+  gastos = data;
 }
  
 async function loadCategorias() {
@@ -279,13 +308,19 @@ function sectionLabel(text) {
 // ---------- Render principal ----------
 function render() {
   const content = document.getElementById("content");
-  document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === activeTab));
+  const submodulos = ["mas", "proveedores", "compras", "gastos"];
+  const grupoActivo = submodulos.includes(activeTab) ? "mas" : activeTab;
+  document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === grupoActivo));
   document.getElementById("add-product-fab").classList.toggle("screen-hidden", activeTab !== "inventario");
   document.getElementById("add-product-fab").classList.toggle("flex", activeTab === "inventario");
  
   if (activeTab === "dashboard") renderDashboard(content);
   if (activeTab === "vender") renderVender(content);
   if (activeTab === "inventario") renderInventario(content);
+  if (activeTab === "mas") renderMas(content);
+  if (activeTab === "proveedores") renderProveedores(content);
+  if (activeTab === "compras") renderCompras(content);
+  if (activeTab === "gastos") renderGastos(content);
   renderCartBar();
 }
  
@@ -468,6 +503,273 @@ function renderInventario(content) {
       </div>
     </div>
   `).join("");
+}
+ 
+// ---------- Más (menú de submódulos) ----------
+function renderMas(content) {
+  content.innerHTML = `
+    ${sectionLabel("Más módulos")}
+    <div class="space-y-3">
+      <button onclick="irA('proveedores')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
+        <span class="text-[14px] font-semibold text-[#241C2E]">Proveedores</span>
+        <span class="text-[#8a7d94]">›</span>
+      </button>
+      <button onclick="irA('compras')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
+        <span class="text-[14px] font-semibold text-[#241C2E]">Compras</span>
+        <span class="text-[#8a7d94]">›</span>
+      </button>
+      <button onclick="irA('gastos')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
+        <span class="text-[14px] font-semibold text-[#241C2E]">Gastos</span>
+        <span class="text-[#8a7d94]">›</span>
+      </button>
+    </div>
+  `;
+}
+function irA(tab) { activeTab = tab; render(); }
+ 
+// ---------- Proveedores ----------
+function renderProveedores(content) {
+  content.innerHTML = `
+    <button onclick="irA('mas')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Proveedores")}
+    <div class="space-y-2 mb-4">
+      ${proveedores.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Todavía no cargaste proveedores.</p>` :
+        proveedores.map((p) => `
+        <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
+          <span class="text-[13px] font-semibold text-[#241C2E]">${p.nombre}</span>
+          <span class="text-[12px] text-[#8a7d94]">${p.telefono || ""}</span>
+        </div>`).join("")}
+    </div>
+    <button onclick="openNewProveedor()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">+ Nuevo proveedor</button>
+  `;
+}
+ 
+function openNewProveedor() {
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Nuevo proveedor</p>
+    <div class="space-y-3">
+      <div>
+        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Nombre</label>
+        <input id="prov-nombre" type="text" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+      </div>
+      <div>
+        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Teléfono (opcional)</label>
+        <input id="prov-telefono" type="text" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+      </div>
+    </div>
+    <button onclick="saveNewProveedor()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3 mt-5">Guardar</button>
+  `);
+}
+async function saveNewProveedor() {
+  const nombre = document.getElementById("prov-nombre").value.trim();
+  if (!nombre) { alert("Poné un nombre."); return; }
+  const telefono = document.getElementById("prov-telefono").value.trim() || null;
+  const { error } = await sb.from("proveedores").insert({ nombre, telefono });
+  if (error) { alert("No se pudo guardar."); console.error(error); return; }
+  closeModal();
+  await loadAll();
+  activeTab = "proveedores";
+  render();
+}
+ 
+// ---------- Compras ----------
+window.__compraItems = [];
+ 
+function renderCompras(content) {
+  content.innerHTML = `
+    <button onclick="irA('mas')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Compras registradas")}
+    <div class="space-y-2 mb-4">
+      ${compras.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Todavía no registraste compras.</p>` :
+        compras.map((c) => `
+        <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[13px] font-semibold text-[#241C2E]">${c.proveedores?.nombre || "Sin proveedor"}</span>
+            <span class="font-mono-num text-[13px] font-semibold">${fmt(c.total)}</span>
+          </div>
+          <p class="text-[11px] text-[#8a7d94]">${c.tipo === "insumos" ? "Insumos" : "Mercadería"} · ${new Date(c.created_at).toLocaleDateString("es-PY")}</p>
+          <p class="text-[12px] text-[#241C2E] mt-1">${(c.compra_items||[]).map(it=>`${it.cantidad}× ${it.productos?.nombre||""}`).join(", ")}</p>
+        </div>`).join("")}
+    </div>
+    <button onclick="openNewCompra()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">+ Nueva compra</button>
+  `;
+}
+ 
+function openNewCompra() {
+  window.__compraItems = [{ producto_id: productos[0]?.id, cantidad: 1, costo_unitario: 0 }];
+  renderCompraModal();
+}
+ 
+function renderCompraModal() {
+  const opcionesProveedor = proveedores.map((p) => `<option value="${p.id}">${p.nombre}</option>`).join("");
+  const opcionesProducto = productos.map((p) => `<option value="${p.id}">${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</option>`).join("");
+  const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+ 
+  const filasHtml = window.__compraItems.map((it, i) => `
+    <div class="bg-[#F7F3FA] rounded-xl p-3 mb-2">
+      <select onchange="cambiarItemCompra(${i}, 'producto_id', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] mb-2 outline-none">
+        ${productos.map((p) => `<option value="${p.id}" ${p.id===it.producto_id?"selected":""}>${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</option>`).join("")}
+      </select>
+      <div class="grid grid-cols-2 gap-2">
+        <div>
+          <label class="text-[10px] text-[#8a7d94]">Cantidad</label>
+          <input type="number" value="${it.cantidad}" onchange="cambiarItemCompra(${i}, 'cantidad', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] outline-none" />
+        </div>
+        <div>
+          <label class="text-[10px] text-[#8a7d94]">Costo c/u</label>
+          <input type="number" value="${it.costo_unitario}" onchange="cambiarItemCompra(${i}, 'costo_unitario', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] outline-none" />
+        </div>
+      </div>
+      ${window.__compraItems.length > 1 ? `<button onclick="quitarItemCompra(${i})" class="text-[11px] text-[#D64545] mt-2">Quitar</button>` : ""}
+    </div>
+  `).join("");
+ 
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Nueva compra</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Proveedor</label>
+    <select id="compra-proveedor" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">${opcionesProveedor}</select>
+ 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Tipo</label>
+    <select id="compra-tipo" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none">
+      <option value="mercaderia">Mercadería</option>
+      <option value="insumos">Insumos</option>
+    </select>
+ 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Productos comprados</label>
+    <div class="mt-2 mb-2">${filasHtml}</div>
+    <button onclick="agregarItemCompra()" class="text-[12px] text-[#6B2D5C] font-semibold mb-4">+ Agregar otro producto</button>
+ 
+    <div class="flex items-center justify-between mb-4">
+      <span class="text-[12px] text-[#8a7d94]">Total</span>
+      <span class="font-mono-num text-[18px] font-semibold text-[#241C2E]">${fmt(total)}</span>
+    </div>
+ 
+    <button onclick="saveNewCompra()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Registrar compra</button>
+  `);
+}
+ 
+function cambiarItemCompra(i, campo, valor) {
+  window.__compraItems[i][campo] = campo === "producto_id" ? Number(valor) : Number(valor);
+  renderCompraModal();
+}
+function agregarItemCompra() {
+  window.__compraItems.push({ producto_id: productos[0]?.id, cantidad: 1, costo_unitario: 0 });
+  renderCompraModal();
+}
+function quitarItemCompra(i) {
+  window.__compraItems.splice(i, 1);
+  renderCompraModal();
+}
+ 
+async function saveNewCompra() {
+  const proveedor_id = Number(document.getElementById("compra-proveedor").value) || null;
+  const tipo = document.getElementById("compra-tipo").value;
+  const registrado_por = usuarios[0]?.nombre || "";
+  const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+ 
+  const { data: compra, error } = await sb
+    .from("compras")
+    .insert({ proveedor_id, tipo, total, registrado_por })
+    .select().single();
+  if (error) { alert("No se pudo registrar la compra."); console.error(error); return; }
+ 
+  const items = window.__compraItems.map((it) => ({ compra_id: compra.id, producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario }));
+  await sb.from("compra_items").insert(items);
+ 
+  // Actualizar stock (+cantidad) y costo_ultimo (al último precio de compra) de cada producto
+  for (const it of window.__compraItems) {
+    const p = productos.find((pr) => pr.id === it.producto_id);
+    if (p) await sb.from("productos").update({ stock: p.stock + it.cantidad, costo_ultimo: it.costo_unitario }).eq("id", p.id);
+  }
+ 
+  window.__compraItems = [];
+  closeModal();
+  await loadAll();
+  activeTab = "compras";
+  render();
+}
+ 
+// ---------- Gastos ----------
+function renderGastos(content) {
+  content.innerHTML = `
+    <button onclick="irA('mas')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Gastos registrados")}
+    <div class="space-y-2 mb-4">
+      ${gastos.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Todavía no registraste gastos.</p>` :
+        gastos.map((g) => `
+        <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center gap-3">
+          ${g.comprobante_url ? `<a href="${g.comprobante_url}" target="_blank"><img src="${g.comprobante_url}" class="w-12 h-12 rounded-lg object-cover shrink-0" /></a>` : `<div class="w-12 h-12 rounded-lg bg-[#F7F3FA] shrink-0"></div>`}
+          <div class="flex-1 min-w-0">
+            <p class="text-[13px] font-semibold text-[#241C2E] truncate">${g.categoria}</p>
+            <p class="text-[11px] text-[#8a7d94] truncate">${g.descripcion || ""} · ${new Date(g.created_at).toLocaleDateString("es-PY")}</p>
+          </div>
+          <span class="font-mono-num text-[13px] font-semibold shrink-0">${fmt(g.monto)}</span>
+        </div>`).join("")}
+    </div>
+    <button onclick="openNewGasto()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">+ Nuevo gasto</button>
+  `;
+}
+ 
+function openNewGasto() {
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Nuevo gasto</p>
+    <div class="space-y-3">
+      <div>
+        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Categoría</label>
+        <select id="gasto-categoria" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none">
+          <option value="Compra de productos">Compra de productos</option>
+          <option value="Insumos de fabricación">Insumos de fabricación</option>
+          <option value="Otro">Otro</option>
+        </select>
+      </div>
+      <div>
+        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Descripción</label>
+        <input id="gasto-descripcion" type="text" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+      </div>
+      <div>
+        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto</label>
+        <input id="gasto-monto" type="number" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+      </div>
+      <div>
+        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Foto del comprobante (opcional)</label>
+        <input id="gasto-foto" type="file" accept="image/*" capture="environment" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[13px] mt-1 outline-none" />
+      </div>
+    </div>
+    <button id="gasto-guardar-btn" onclick="saveNewGasto()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3 mt-5">Guardar gasto</button>
+  `);
+}
+ 
+async function saveNewGasto() {
+  const btn = document.getElementById("gasto-guardar-btn");
+  const categoria = document.getElementById("gasto-categoria").value;
+  const descripcion = document.getElementById("gasto-descripcion").value.trim() || null;
+  const monto = Number(document.getElementById("gasto-monto").value) || 0;
+  const registrado_por = usuarios[0]?.nombre || "";
+  const archivo = document.getElementById("gasto-foto").files[0];
+ 
+  btn.textContent = "Guardando...";
+  btn.disabled = true;
+ 
+  let comprobante_url = null;
+  if (archivo) {
+    const nombreArchivo = `${Date.now()}-${archivo.name}`;
+    const { error: uploadError } = await sb.storage.from("comprobantes").upload(nombreArchivo, archivo);
+    if (uploadError) {
+      alert("No se pudo subir la foto, pero podés guardar el gasto sin ella.");
+      console.error(uploadError);
+    } else {
+      const { data } = sb.storage.from("comprobantes").getPublicUrl(nombreArchivo);
+      comprobante_url = data.publicUrl;
+    }
+  }
+ 
+  const { error } = await sb.from("gastos").insert({ categoria, descripcion, monto, comprobante_url, registrado_por });
+  if (error) { alert("No se pudo guardar el gasto."); console.error(error); return; }
+ 
+  closeModal();
+  await loadAll();
+  activeTab = "gastos";
+  render();
 }
  
 function renderCartBar() {
