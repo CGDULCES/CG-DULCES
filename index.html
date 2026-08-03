@@ -319,17 +319,15 @@ function isSameDay(dateStr, ref) {
   return new Date(dateStr).toDateString() === ref.toDateString();
 }
  
-function todayStats() {
-  const today = new Date();
+// Dinero real de un día puntual: ventas al contado de ese día + cobros de fiado recibidos ese día.
+// Lo fiado NO cuenta hasta que se cobra, sin importar cuándo se hizo la venta.
+function dineroRealDelDia(fecha) {
+  const ventasContado = ventasHistoricas.filter((v) => isSameDay(v.created_at, fecha) && !v.es_fiado);
+  let ganancia = ventasContado.reduce((s, v) => s + (v.venta_items || []).reduce((si, it) => si + it.subtotal, 0), 0);
+  let gananciaReal = ventasContado.reduce((s, v) => s + (v.venta_items || []).reduce((si, it) => si + (it.subtotal - it.costo_unitario * it.cantidad), 0), 0);
  
-  // Ventas al contado de hoy: cuentan de una como ganancia
-  const ventasContadoHoy = ventasHistoricas.filter((v) => isSameDay(v.created_at, today) && !v.es_fiado);
-  let ganancia = ventasContadoHoy.reduce((s, v) => s + (v.venta_items || []).reduce((si, it) => si + it.subtotal, 0), 0);
-  let gananciaReal = ventasContadoHoy.reduce((s, v) => s + (v.venta_items || []).reduce((si, it) => si + (it.subtotal - it.costo_unitario * it.cantidad), 0), 0);
- 
-  // Cobros de fiado recibidos hoy: recién ahí entran como ganancia (no antes)
-  const cobrosHoy = cobros.filter((c) => isSameDay(c.created_at, today));
-  cobrosHoy.forEach((c) => {
+  const cobrosDelDia = cobros.filter((c) => isSameDay(c.created_at, fecha));
+  cobrosDelDia.forEach((c) => {
     ganancia += Number(c.monto);
     const venta = ventasHistoricas.find((v) => v.id === c.venta_id);
     if (venta && venta.total > 0) {
@@ -344,6 +342,10 @@ function todayStats() {
   return { ganancia, gananciaReal };
 }
  
+function todayStats() {
+  return dineroRealDelDia(new Date());
+}
+ 
 function weekTotal() {
   return last7DaysChartData().totals.reduce((s, t) => s + t, 0);
 }
@@ -352,7 +354,7 @@ function last7DaysChartData() {
   const labels = ["Lun","Mar","Mié","Jue","Vie","Sáb","Dom"];
   const days = [];
   for (let i = 6; i >= 0; i--) { const d = new Date(); d.setDate(d.getDate() - i); days.push(d); }
-  const totals = days.map((d) => ventasHistoricas.filter((v) => isSameDay(v.created_at, d)).reduce((s, v) => s + Number(v.total), 0));
+  const totals = days.map((d) => dineroRealDelDia(d).ganancia);
   const dayLabels = days.map((d) => labels[(d.getDay() + 6) % 7]);
   return { dayLabels, totals };
 }
@@ -1600,3 +1602,5 @@ checkSession();
 </body>
 </html>
  
+
+
