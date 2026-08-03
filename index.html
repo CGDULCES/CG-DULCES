@@ -708,11 +708,17 @@ async function saveNewCliente() {
 function openCobro(clienteId) {
   const c = clientes.find((cc) => cc.id === clienteId);
   const deuda = deudaCliente(clienteId);
+  window.__cobroDeuda = deuda;
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Cobrar a ${c.nombre}</p>
     <p class="text-[12px] text-[#8a7d94] mb-4">Debe ${fmt(deuda)}</p>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto que paga ahora</label>
-    <input id="cobro-monto" type="number" value="${deuda}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none" />
+    <input id="cobro-monto" type="number" value="${deuda}" oninput="actualizarSaldoCobro()" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+    <div class="flex gap-2 mt-2 mb-1">
+      <button type="button" onclick="setMontoCobro(${deuda})" class="text-[11px] text-[#6B2D5C] font-semibold bg-[#F7F3FA] rounded-lg px-2.5 py-1.5">Pagar todo</button>
+      <button type="button" onclick="setMontoCobro(${Math.round(deuda/2)})" class="text-[11px] text-[#6B2D5C] font-semibold bg-[#F7F3FA] rounded-lg px-2.5 py-1.5">Pagar la mitad</button>
+    </div>
+    <p id="cobro-saldo-restante" class="text-[11px] text-[#8a7d94] mb-4">Después de este pago queda debiendo Gs. 0</p>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Forma de pago</label>
     <select id="cobro-medio" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none">
       <option value="efectivo">Efectivo</option>
@@ -721,6 +727,16 @@ function openCobro(clienteId) {
     </select>
     <button onclick="saveCobro(${clienteId})" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Registrar cobro</button>
   `);
+}
+ 
+function actualizarSaldoCobro() {
+  const monto = Number(document.getElementById("cobro-monto").value) || 0;
+  const restante = Math.max(0, window.__cobroDeuda - monto);
+  document.getElementById("cobro-saldo-restante").textContent = `Después de este pago queda debiendo ${fmt(restante)}`;
+}
+function setMontoCobro(monto) {
+  document.getElementById("cobro-monto").value = monto;
+  actualizarSaldoCobro();
 }
 async function saveCobro(clienteId) {
   const monto = Number(document.getElementById("cobro-monto").value) || 0;
@@ -764,7 +780,9 @@ window.__originalCompraItems = [];
 function openNewCompra() {
   window.__editingCompraId = null;
   window.__originalCompraItems = [];
-  window.__compraItems = [{ producto_id: productos[0]?.id, cantidad: 1, costo_unitario: 0 }];
+  window.__compraTipo = "mercaderia";
+  const primerProducto = productos.find((p) => !p.es_insumo);
+  window.__compraItems = [{ producto_id: primerProducto?.id, cantidad: 1, costo_unitario: 0 }];
   renderCompraModal();
 }
  
@@ -772,6 +790,7 @@ function openEditCompra(id) {
   const c = compras.find((cc) => cc.id === id);
   if (!c) return;
   window.__editingCompraId = id;
+  window.__compraTipo = c.tipo;
   window.__compraItems = (c.compra_items || []).map((it) => ({ id: it.id, producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario }));
   window.__originalCompraItems = JSON.parse(JSON.stringify(window.__compraItems));
   window.__editingProveedorId = c.proveedor_id;
@@ -779,10 +798,25 @@ function openEditCompra(id) {
   renderCompraModal();
 }
  
+function cambiarTipoCompra(valor) {
+  window.__compraTipo = valor;
+  const disponibles = productosPorTipoCompra();
+  window.__compraItems = window.__compraItems.map((it) => ({
+    ...it,
+    producto_id: disponibles.some((p) => p.id === it.producto_id) ? it.producto_id : disponibles[0]?.id,
+  }));
+  renderCompraModal();
+}
+ 
+function productosPorTipoCompra() {
+  return productos.filter((p) => (window.__compraTipo === "insumos" ? p.es_insumo : !p.es_insumo));
+}
+ 
 function renderCompraModal() {
   const editando = !!window.__editingCompraId;
   const opcionesProveedor = proveedores.map((p) => `<option value="${p.id}" ${editando && window.__editingProveedorId===p.id ? "selected":""}>${p.nombre}</option>`).join("");
   const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+  const productosDisponibles = productosPorTipoCompra();
  
   const filasHtml = window.__compraItems.map((it, i) => {
     const productoSel = productos.find((p) => p.id === it.producto_id);
@@ -790,7 +824,8 @@ function renderCompraModal() {
     return `
     <div class="bg-[#F7F3FA] rounded-xl p-3 mb-2">
       <select onchange="cambiarItemCompra(${i}, 'producto_id', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] mb-2 outline-none">
-        ${productos.map((p) => `<option value="${p.id}" ${p.id===it.producto_id?"selected":""}>${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</option>`).join("")}
+        ${productosDisponibles.length === 0 ? `<option value="">No hay productos de este tipo</option>` :
+          productosDisponibles.map((p) => `<option value="${p.id}" ${p.id===it.producto_id?"selected":""}>${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</option>`).join("")}
       </select>
       <div class="grid grid-cols-2 gap-2">
         <div>
@@ -814,9 +849,9 @@ function renderCompraModal() {
     <select id="compra-proveedor" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">${opcionesProveedor}</select>
  
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Tipo</label>
-    <select id="compra-tipo" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none">
-      <option value="mercaderia" ${editando && window.__editingTipo==='mercaderia' ? "selected":""}>Mercadería</option>
-      <option value="insumos" ${editando && window.__editingTipo==='insumos' ? "selected":""}>Insumos</option>
+    <select id="compra-tipo" onchange="cambiarTipoCompra(this.value)" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none">
+      <option value="mercaderia" ${window.__compraTipo==='mercaderia' ? "selected":""}>Mercadería</option>
+      <option value="insumos" ${window.__compraTipo==='insumos' ? "selected":""}>Insumos</option>
     </select>
  
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Productos comprados</label>
@@ -838,7 +873,8 @@ function cambiarItemCompra(i, campo, valor) {
   renderCompraModal();
 }
 function agregarItemCompra() {
-  window.__compraItems.push({ producto_id: productos[0]?.id, cantidad: 1, costo_unitario: 0 });
+  const disponibles = productosPorTipoCompra();
+  window.__compraItems.push({ producto_id: disponibles[0]?.id, cantidad: 1, costo_unitario: 0 });
   renderCompraModal();
 }
 function quitarItemCompra(i) {
