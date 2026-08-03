@@ -233,10 +233,14 @@ function todayStats() {
   const of = ventasHistoricas.filter((v) => isSameDay(v.created_at, today));
   const total = of.reduce((s, v) => s + Number(v.total), 0);
   const ganancia = of.reduce((s, v) => {
+    const g = (v.venta_items || []).reduce((si, it) => si + it.subtotal, 0);
+    return s + g;
+  }, 0);
+  const gananciaReal = of.reduce((s, v) => {
     const g = (v.venta_items || []).reduce((si, it) => si + (it.subtotal - it.costo_unitario * it.cantidad), 0);
     return s + g;
   }, 0);
-  return { total, ganancia };
+  return { total, ganancia, gananciaReal };
 }
  
 function last7DaysChartData() {
@@ -286,13 +290,15 @@ function render() {
 }
  
 function renderDashboard(content) {
-  const { total, ganancia } = todayStats();
+  const { total, ganancia, gananciaReal } = todayStats();
   const lowStock = productos.filter((p) => !p.es_insumo && p.categorias?.nombre !== HELADOS_OCULTO && p.stock <= p.stock_minimo);
   const recientes = ventasHistoricas.slice(0, 4);
  
   content.innerHTML = `
     <div class="space-y-5">
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+          <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Ventas de hoy</p>
           <p class="font-mono-num text-[19px] font-semibold text-[#241C2E]">${fmt(total)}</p>
         </div>
         <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
@@ -307,6 +313,11 @@ function renderDashboard(content) {
           <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Más vendido</p>
           <p class="text-[13px] font-semibold text-[#241C2E] leading-tight mt-1.5">${topProductName()}</p>
         </div>
+      </div>
+ 
+      <div class="bg-[#2F9E7A]/10 border border-[#2F9E7A]/25 rounded-xl px-4 py-2.5 flex items-center justify-between">
+        <span class="text-[10px] font-semibold text-[#2F9E7A] uppercase tracking-wide">Ganancia real de hoy (venta − costo)</span>
+        <span class="font-mono-num text-[15px] font-bold text-[#2F9E7A]">${fmt(gananciaReal)}</span>
       </div>
  
       <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
