@@ -113,6 +113,9 @@ let usuarios = [];
 let ventasHistoricas = [];
 let proveedores = [];
 let compras = [];
+let clientes = [];
+let ventasClientes = [];
+let cobros = [];
 let cart = {};
 let heladoCart = []; // ventas armadas de helado: { id, tipo: 'bola'|'pote14', bolas: [productoId,...], envaseId, cobertura, total }
 let activeTab = "dashboard";
@@ -153,8 +156,26 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
  
 // ---------- Carga de datos ----------
 async function loadAll() {
-  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras()]);
+  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras(), loadClientes(), loadVentasClientes(), loadCobros()]);
   render();
+}
+ 
+async function loadClientes() {
+  const { data, error } = await sb.from("clientes").select("*").order("nombre");
+  if (error) { console.error(error); return; }
+  clientes = data;
+}
+ 
+async function loadVentasClientes() {
+  const { data, error } = await sb.from("ventas").select("cliente_id, total, es_fiado, created_at").not("cliente_id", "is", null);
+  if (error) { console.error(error); return; }
+  ventasClientes = data;
+}
+ 
+async function loadCobros() {
+  const { data, error } = await sb.from("cobros").select("*").order("created_at", { ascending: false });
+  if (error) { console.error(error); return; }
+  cobros = data;
 }
  
 async function loadProveedores() {
@@ -345,7 +366,7 @@ function sectionLabel(text) {
 // ---------- Render principal ----------
 function render() {
   const content = document.getElementById("content");
-  const submodulos = ["mas", "proveedores", "compras"];
+  const submodulos = ["mas", "proveedores", "compras", "clientes"];
   const grupoActivo = submodulos.includes(activeTab) ? "mas" : activeTab;
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === grupoActivo));
   document.getElementById("add-product-fab").classList.toggle("screen-hidden", activeTab !== "inventario");
@@ -356,6 +377,7 @@ function render() {
   if (activeTab === "inventario") renderInventario(content);
   if (activeTab === "mas") renderMas(content);
   if (activeTab === "proveedores") renderProveedores(content);
+  if (activeTab === "clientes") renderClientes(content);
   if (activeTab === "compras") renderCompras(content);
   renderCartBar();
 }
@@ -565,6 +587,10 @@ function renderMas(content) {
   content.innerHTML = `
     ${sectionLabel("Más módulos")}
     <div class="space-y-3">
+      <button onclick="irA('clientes')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
+        <span class="text-[14px] font-semibold text-[#241C2E]">Clientes</span>
+        <span class="text-[#8a7d94]">›</span>
+      </button>
       <button onclick="irA('proveedores')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
         <span class="text-[14px] font-semibold text-[#241C2E]">Proveedores</span>
         <span class="text-[#8a7d94]">›</span>
@@ -620,6 +646,92 @@ async function saveNewProveedor() {
   closeModal();
   await loadAll();
   activeTab = "proveedores";
+  render();
+}
+ 
+// ---------- Clientes y Fiado ----------
+function deudaCliente(clienteId) {
+  const vendido = ventasClientes.filter((v) => v.cliente_id === clienteId && v.es_fiado).reduce((s, v) => s + Number(v.total), 0);
+  const pagado = cobros.filter((c) => c.cliente_id === clienteId).reduce((s, c) => s + Number(c.monto), 0);
+  return vendido - pagado;
+}
+function totalCompradoCliente(clienteId) {
+  return ventasClientes.filter((v) => v.cliente_id === clienteId).reduce((s, v) => s + Number(v.total), 0);
+}
+ 
+function renderClientes(content) {
+  const ordenados = [...clientes].sort((a, b) => totalCompradoCliente(b.id) - totalCompradoCliente(a.id));
+  content.innerHTML = `
+    <button onclick="irA('mas')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Clientes (ordenados por cuánto compraron)")}
+    <div class="space-y-2 mb-4">
+      ${ordenados.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Todavía no cargaste clientes.</p>` :
+        ordenados.map((c) => {
+          const deuda = deudaCliente(c.id);
+          const comprado = totalCompradoCliente(c.id);
+          return `
+          <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-[13px] font-semibold text-[#241C2E]">${c.nombre}</span>
+              <span class="font-mono-num text-[12px] text-[#8a7d94]">total ${fmt(comprado)}</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-[12px] ${deuda > 0 ? 'text-[#D64545] font-semibold' : 'text-[#8a7d94]'}">${deuda > 0 ? `Debe ${fmt(deuda)}` : "Sin deuda"}</span>
+              ${deuda > 0 ? `<button onclick="openCobro(${c.id})" class="text-[12px] text-[#2F9E7A] font-semibold">Cobrar</button>` : ""}
+            </div>
+          </div>`;
+        }).join("")}
+    </div>
+    <button onclick="openNewCliente()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">+ Nuevo cliente</button>
+  `;
+}
+ 
+function openNewCliente() {
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Nuevo cliente</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Nombre</label>
+    <input id="cliente-nombre" type="text" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+    <button onclick="saveNewCliente()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3 mt-5">Guardar</button>
+  `);
+}
+async function saveNewCliente() {
+  const nombre = document.getElementById("cliente-nombre").value.trim();
+  if (!nombre) { alert("Poné un nombre."); return; }
+  const { error } = await sb.from("clientes").insert({ nombre });
+  if (error) { alert("No se pudo guardar."); console.error(error); return; }
+  closeModal();
+  await loadAll();
+  activeTab = "clientes";
+  render();
+}
+ 
+function openCobro(clienteId) {
+  const c = clientes.find((cc) => cc.id === clienteId);
+  const deuda = deudaCliente(clienteId);
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Cobrar a ${c.nombre}</p>
+    <p class="text-[12px] text-[#8a7d94] mb-4">Debe ${fmt(deuda)}</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto que paga ahora</label>
+    <input id="cobro-monto" type="number" value="${deuda}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Forma de pago</label>
+    <select id="cobro-medio" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none">
+      <option value="efectivo">Efectivo</option>
+      <option value="transferencia">Transferencia</option>
+      <option value="qr">QR</option>
+    </select>
+    <button onclick="saveCobro(${clienteId})" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Registrar cobro</button>
+  `);
+}
+async function saveCobro(clienteId) {
+  const monto = Number(document.getElementById("cobro-monto").value) || 0;
+  if (monto <= 0) return;
+  const medio_pago = document.getElementById("cobro-medio").value;
+  const registrado_por = usuarios[0]?.nombre || "";
+  const { error } = await sb.from("cobros").insert({ cliente_id: clienteId, monto, medio_pago, registrado_por });
+  if (error) { alert("No se pudo registrar el cobro."); console.error(error); return; }
+  closeModal();
+  await loadAll();
+  activeTab = "clientes";
   render();
 }
  
@@ -986,16 +1098,30 @@ function openConfirmSale() {
   const totalHelados = heladoCart.reduce((s, h) => s + h.total, 0);
   const total = totalNormal + totalHelados;
   const opciones = usuarios.map((u) => `<option value="${u.nombre}">${u.nombre}</option>`).join("");
+  const opcionesCliente = clientes.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join("");
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Confirmar venta</p>
     <p class="text-[13px] text-[#8a7d94] mb-1">Total</p>
     <p class="font-mono-num text-[22px] font-semibold text-[#241C2E] mb-4">${fmt(total)}</p>
  
-    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Medio de pago</label>
-    <div class="grid grid-cols-3 gap-2 mt-1 mb-4">
-      <button type="button" onclick="selectPago('efectivo', this)" class="pago-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium bg-[#6B2D5C] text-white" data-pago="efectivo">Efectivo</button>
-      <button type="button" onclick="selectPago('transferencia', this)" class="pago-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium" data-pago="transferencia">Transf.</button>
-      <button type="button" onclick="selectPago('qr', this)" class="pago-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium" data-pago="qr">QR</button>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cliente (opcional)</label>
+    <select id="venta-cliente" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">
+      <option value="">Sin cliente</option>
+      ${opcionesCliente}
+    </select>
+ 
+    <label class="flex items-center gap-2 mb-4">
+      <input type="checkbox" id="venta-fiado" onchange="toggleFiado(this.checked)" class="w-4 h-4" />
+      <span class="text-[13px] text-[#241C2E]">Es fiado (queda a cuenta del cliente)</span>
+    </label>
+ 
+    <div id="medio-pago-wrap">
+      <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Medio de pago</label>
+      <div class="grid grid-cols-3 gap-2 mt-1 mb-4">
+        <button type="button" onclick="selectPago('efectivo', this)" class="pago-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium bg-[#6B2D5C] text-white" data-pago="efectivo">Efectivo</button>
+        <button type="button" onclick="selectPago('transferencia', this)" class="pago-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium" data-pago="transferencia">Transf.</button>
+        <button type="button" onclick="selectPago('qr', this)" class="pago-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium" data-pago="qr">QR</button>
+      </div>
     </div>
  
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Registrado por</label>
@@ -1004,6 +1130,17 @@ function openConfirmSale() {
     <button onclick="confirmSale()" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Registrar venta</button>
   `);
   window.__medioPago = "efectivo";
+}
+ 
+function toggleFiado(checked) {
+  const wrap = document.getElementById("medio-pago-wrap");
+  const clienteSelect = document.getElementById("venta-cliente");
+  if (checked) {
+    wrap.classList.add("screen-hidden");
+    if (!clienteSelect.value) alert("Elegí un cliente para dejarlo a cuenta.");
+  } else {
+    wrap.classList.remove("screen-hidden");
+  }
 }
  
 function selectPago(medio, btn) {
@@ -1019,7 +1156,11 @@ async function confirmSale() {
   if (items.length === 0 && heladoCart.length === 0) return;
  
   const registrado_por = document.getElementById("registrado-por").value;
-  const medio_pago = window.__medioPago || "efectivo";
+  const es_fiado = document.getElementById("venta-fiado").checked;
+  const clienteVal = document.getElementById("venta-cliente").value;
+  const cliente_id = clienteVal ? Number(clienteVal) : null;
+  if (es_fiado && !cliente_id) { alert("Elegí un cliente para dejarlo a cuenta."); return; }
+  const medio_pago = es_fiado ? "fiado" : (window.__medioPago || "efectivo");
  
   const calculo = calcularCarritoPromos();
   let subtotalTotal = calculo.subtotalTotal, descuentoTotal = calculo.descuentoTotal;
@@ -1040,7 +1181,7 @@ async function confirmSale() {
  
   const { data: venta, error: ventaError } = await sb
     .from("ventas")
-    .insert({ subtotal: subtotalTotal, descuento_total: descuentoTotal, total, medio_pago, registrado_por })
+    .insert({ subtotal: subtotalTotal, descuento_total: descuentoTotal, total, medio_pago, registrado_por, cliente_id, es_fiado })
     .select().single();
   if (ventaError) { alert("No se pudo registrar la venta."); console.error(ventaError); return; }
  
@@ -1174,6 +1315,11 @@ async function saveEditProduct(id) {
 }
  
 async function deleteProduct(id) {
+  const p = productos.find((pr) => pr.id === id);
+  if (p && (p.nombre === "Helado · Bola" || p.nombre === "Helado · Pote 1/4")) {
+    alert("Este producto es necesario para que funcione la venta de Helados y no se puede eliminar. Si querés dejar de venderlo, poné el precio en 0 en vez de borrarlo.");
+    return;
+  }
   if (!confirm("¿Eliminar este producto? Ya no va a aparecer en la app, pero se conserva en el historial de ventas pasadas.")) return;
   const { error } = await sb.from("productos").update({ activo: false }).eq("id", id);
   if (error) { alert("No se pudo eliminar."); console.error(error); return; }
@@ -1264,3 +1410,5 @@ checkSession();
 </body>
 </html>
  
+
+
