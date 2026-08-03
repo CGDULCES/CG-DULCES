@@ -218,7 +218,7 @@ function ventasVisibles() {
 }
  
 function baldesHelado() {
-  return productos.filter((p) => p.producto_base === "Balde Helado" && p.es_insumo);
+  return productos.filter((p) => p.producto_base === "Balde Helado");
 }
 function insumoPorNombre(nombre) {
   return productos.find((p) => p.nombre === nombre && p.es_insumo);
@@ -362,7 +362,7 @@ function render() {
  
 function renderDashboard(content) {
   const { total, ganancia, gananciaReal } = todayStats();
-  const lowStock = productos.filter((p) => !p.es_insumo && p.categorias?.nombre !== HELADOS_OCULTO && p.stock <= p.stock_minimo);
+  const lowStock = productos.filter((p) => !p.es_insumo && p.nombre !== "Helado · Bola" && p.nombre !== "Helado · Pote 1/4" && p.stock <= p.stock_minimo);
   const recientes = ventasHistoricas.slice(0, 4);
  
   content.innerHTML = `
@@ -1263,6 +1263,3 @@ checkSession();
 </script>
 </body>
 </html>
- 
-
-
