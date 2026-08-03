@@ -230,20 +230,64 @@ function productoHeladoPote() {
   return productos.find((p) => p.nombre === "Helado · Pote 1/4");
 }
  
-function promoDe(productoId) {
-  return promociones.find((pr) => pr.producto_id === productoId);
+function promoParaProducto(producto) {
+  if (!producto) return null;
+  return promociones.find((pr) => pr.categoria_id && pr.categoria_id === producto.categoria_id)
+    || promociones.find((pr) => pr.producto_id === producto.id);
 }
  
-function calcularLinea(producto, cantidad) {
-  const promo = promoDe(producto.id);
-  const normal = producto.precio_venta * cantidad;
-  if (promo && cantidad >= promo.cantidad_requerida) {
-    const grupos = Math.floor(cantidad / promo.cantidad_requerida);
-    const resto = cantidad % promo.cantidad_requerida;
-    const promoTotal = grupos * promo.precio_promocional + resto * producto.precio_venta;
-    return { subtotal: promoTotal, descuento: normal - promoTotal };
-  }
-  return { subtotal: normal, descuento: 0 };
+function cantidadGrupoEnCarrito(promo) {
+  return productos
+    .filter((p) => promoParaProducto(p)?.id === promo.id)
+    .reduce((s, p) => s + (cart[p.id] || 0), 0);
+}
+ 
+// Calcula todas las líneas del carrito aplicando promociones que combinan
+// productos de la misma categoría (ej: 2 alfajores de sabores distintos)
+function calcularCarritoPromos() {
+  const entradas = Object.entries(cart)
+    .filter(([, q]) => q > 0)
+    .map(([id, q]) => ({ producto: productos.find((p) => p.id === Number(id)), cantidad: q }));
+ 
+  const grupos = {};
+  entradas.forEach(({ producto, cantidad }) => {
+    const promo = promoParaProducto(producto);
+    const key = promo ? `promo-${promo.id}` : `solo-${producto.id}`;
+    if (!grupos[key]) grupos[key] = { promo, items: [] };
+    grupos[key].items.push({ producto, cantidad });
+  });
+ 
+  const lineas = [];
+  let subtotalTotal = 0, descuentoTotal = 0;
+ 
+  Object.values(grupos).forEach((g) => {
+    const totalQty = g.items.reduce((s, it) => s + it.cantidad, 0);
+    const normalTotal = g.items.reduce((s, it) => s + it.producto.precio_venta * it.cantidad, 0);
+ 
+    if (g.promo && totalQty >= g.promo.cantidad_requerida) {
+      const gruposCompletos = Math.floor(totalQty / g.promo.cantidad_requerida);
+      const resto = totalQty % g.promo.cantidad_requerida;
+      const precioPromedio = normalTotal / totalQty;
+      const promoTotal = gruposCompletos * g.promo.precio_promocional + resto * precioPromedio;
+      const descuento = normalTotal - promoTotal;
+ 
+      g.items.forEach((it) => {
+        const parteNormal = it.producto.precio_venta * it.cantidad;
+        const parteDescuento = normalTotal > 0 ? descuento * (parteNormal / normalTotal) : 0;
+        lineas.push({ producto: it.producto, cantidad: it.cantidad, subtotal: parteNormal - parteDescuento, descuento: parteDescuento });
+        subtotalTotal += parteNormal;
+        descuentoTotal += parteDescuento;
+      });
+    } else {
+      g.items.forEach((it) => {
+        const subtotal = it.producto.precio_venta * it.cantidad;
+        lineas.push({ producto: it.producto, cantidad: it.cantidad, subtotal, descuento: 0 });
+        subtotalTotal += subtotal;
+      });
+    }
+  });
+ 
+  return { lineas, subtotalTotal, descuentoTotal, total: subtotalTotal - descuentoTotal };
 }
  
 function isSameDay(dateStr, ref) {
@@ -404,9 +448,8 @@ function renderVender(content) {
         ${lista.map((p) => {
           const qty = cart[p.id] || 0;
           const color = categoryColors[cat] || "#6B2D5C";
-          const promo = promoDe(p.id);
-          const { subtotal } = calcularLinea(p, qty || 1);
-          const promoActiva = promo && qty >= promo.cantidad_requerida;
+          const promo = promoParaProducto(p);
+          const promoActiva = promo && cantidadGrupoEnCarrito(promo) >= promo.cantidad_requerida;
           return `
           <div class="bg-white rounded-2xl p-3.5 shadow-sm border border-black/[0.04] flex flex-col gap-2">
             <div class="flex items-center gap-1.5">
@@ -415,7 +458,7 @@ function renderVender(content) {
             </div>
             <p class="text-[13px] font-semibold text-[#241C2E] leading-tight">${p.nombre}</p>
             <p class="font-mono-num text-[13px] text-[#6B2D5C] font-semibold">${fmt(p.precio_venta)}</p>
-            ${promo ? `<p class="text-[10px] text-[#2F9E7A] font-medium">${promoActiva ? "✓ Promo aplicada" : `Promo ${promo.cantidad_requerida}x ${fmt(promo.precio_promocional)}`}</p>` : ""}
+            ${promo ? `<p class="text-[10px] text-[#2F9E7A] font-medium">${promoActiva ? "✓ Promo aplicada" : `Promo ${promo.cantidad_requerida}x ${fmt(promo.precio_promocional)}${promo.categoria_id ? " (combinable)" : ""}`}</p>` : ""}
             <div class="flex items-center justify-between mt-1">
               <button onclick="changeQty(${p.id}, -1)" class="w-7 h-7 rounded-full bg-[#F7F3FA] flex items-center justify-center" ${qty===0?"disabled style='opacity:.3'":""}>−</button>
               <span class="font-mono-num text-[14px] font-semibold w-6 text-center">${qty}</span>
@@ -629,7 +672,10 @@ function renderCompraModal() {
   const opcionesProveedor = proveedores.map((p) => `<option value="${p.id}" ${editando && window.__editingProveedorId===p.id ? "selected":""}>${p.nombre}</option>`).join("");
   const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
  
-  const filasHtml = window.__compraItems.map((it, i) => `
+  const filasHtml = window.__compraItems.map((it, i) => {
+    const productoSel = productos.find((p) => p.id === it.producto_id);
+    const factor = factorConversion(productoSel);
+    return `
     <div class="bg-[#F7F3FA] rounded-xl p-3 mb-2">
       <select onchange="cambiarItemCompra(${i}, 'producto_id', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] mb-2 outline-none">
         ${productos.map((p) => `<option value="${p.id}" ${p.id===it.producto_id?"selected":""}>${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</option>`).join("")}
@@ -644,9 +690,11 @@ function renderCompraModal() {
           <input type="number" value="${it.costo_unitario}" onchange="cambiarItemCompra(${i}, 'costo_unitario', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] outline-none" />
         </div>
       </div>
+      ${factor > 1 ? `<p class="text-[10px] text-[#2F9E7A] mt-1.5">Suma ${it.cantidad * factor} al stock (${factor} por unidad)</p>` : ""}
       ${window.__compraItems.length > 1 ? `<button onclick="quitarItemCompra(${i})" class="text-[11px] text-[#D64545] mt-2">Quitar</button>` : ""}
     </div>
-  `).join("");
+  `;
+  }).join("");
  
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">${editando ? "Editar compra" : "Nueva compra"}</p>
@@ -686,6 +734,10 @@ function quitarItemCompra(i) {
   renderCompraModal();
 }
  
+function factorConversion(p) {
+  return p?.equivalencia_bolas || 1;
+}
+ 
 async function saveNewCompra() {
   const proveedor_id = Number(document.getElementById("compra-proveedor").value) || null;
   const tipo = document.getElementById("compra-tipo").value;
@@ -701,10 +753,11 @@ async function saveNewCompra() {
   const items = window.__compraItems.map((it) => ({ compra_id: compra.id, producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario }));
   await sb.from("compra_items").insert(items);
  
-  // Actualizar stock (+cantidad) y costo_ultimo (al último precio de compra) de cada producto
+  // Actualizar stock y costo_ultimo. Si el producto tiene equivalencia_bolas (ej: balde de helado),
+  // la cantidad comprada se convierte a la unidad en la que se controla el stock.
   for (const it of window.__compraItems) {
     const p = productos.find((pr) => pr.id === it.producto_id);
-    if (p) await sb.from("productos").update({ stock: p.stock + it.cantidad, costo_ultimo: it.costo_unitario }).eq("id", p.id);
+    if (p) await sb.from("productos").update({ stock: p.stock + it.cantidad * factorConversion(p), costo_ultimo: it.costo_unitario }).eq("id", p.id);
   }
  
   window.__compraItems = [];
@@ -726,12 +779,12 @@ async function saveEditCompra() {
       const original = window.__originalCompraItems.find((o) => o.id === it.id);
       const delta = it.cantidad - (original?.cantidad || 0);
       const p = productos.find((pr) => pr.id === it.producto_id);
-      if (p) await sb.from("productos").update({ stock: p.stock + delta, costo_ultimo: it.costo_unitario }).eq("id", p.id);
+      if (p) await sb.from("productos").update({ stock: p.stock + delta * factorConversion(p), costo_ultimo: it.costo_unitario }).eq("id", p.id);
       await sb.from("compra_items").update({ producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario }).eq("id", it.id);
     } else {
       // Línea nueva agregada durante la edición
       const p = productos.find((pr) => pr.id === it.producto_id);
-      if (p) await sb.from("productos").update({ stock: p.stock + it.cantidad, costo_ultimo: it.costo_unitario }).eq("id", p.id);
+      if (p) await sb.from("productos").update({ stock: p.stock + it.cantidad * factorConversion(p), costo_ultimo: it.costo_unitario }).eq("id", p.id);
       await sb.from("compra_items").insert({ compra_id: compraId, producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario });
     }
   }
@@ -741,7 +794,7 @@ async function saveEditCompra() {
     const sigueExistiendo = window.__compraItems.some((it) => it.id === original.id);
     if (!sigueExistiendo) {
       const p = productos.find((pr) => pr.id === original.producto_id);
-      if (p) await sb.from("productos").update({ stock: p.stock - original.cantidad }).eq("id", p.id);
+      if (p) await sb.from("productos").update({ stock: p.stock - original.cantidad * factorConversion(p) }).eq("id", p.id);
       await sb.from("compra_items").delete().eq("id", original.id);
     }
   }
@@ -760,7 +813,7 @@ async function deleteCompra() {
   if (!confirm("¿Eliminar esta compra? Se va a descontar del stock lo que había sumado.")) return;
   for (const it of window.__originalCompraItems) {
     const p = productos.find((pr) => pr.id === it.producto_id);
-    if (p) await sb.from("productos").update({ stock: p.stock - it.cantidad }).eq("id", p.id);
+    if (p) await sb.from("productos").update({ stock: p.stock - it.cantidad * factorConversion(p) }).eq("id", p.id);
   }
   await sb.from("compras").delete().eq("id", window.__editingCompraId);
  
@@ -777,10 +830,7 @@ function renderCartBar() {
   const items = Object.entries(cart).filter(([, q]) => q > 0);
   const hayHelados = heladoCart.length > 0;
   if (activeTab !== "vender" || (items.length === 0 && !hayHelados)) { bar.classList.add("screen-hidden"); return; }
-  const totalNormal = items.reduce((s, [id, q]) => {
-    const p = productos.find((pr) => pr.id === Number(id));
-    return s + (p ? calcularLinea(p, q).subtotal : 0);
-  }, 0);
+  const totalNormal = calcularCarritoPromos().total;
   const totalHelados = heladoCart.reduce((s, h) => s + h.total, 0);
   const total = totalNormal + totalHelados;
   const cantidadItems = items.length + heladoCart.length;
@@ -932,11 +982,7 @@ function changeQty(id, delta) {
 }
  
 function openConfirmSale() {
-  const items = Object.entries(cart).filter(([, q]) => q > 0);
-  const totalNormal = items.reduce((s, [id, q]) => {
-    const p = productos.find((pr) => pr.id === Number(id));
-    return s + calcularLinea(p, q).subtotal;
-  }, 0);
+  const totalNormal = calcularCarritoPromos().total;
   const totalHelados = heladoCart.reduce((s, h) => s + h.total, 0);
   const total = totalNormal + totalHelados;
   const opciones = usuarios.map((u) => `<option value="${u.nombre}">${u.nombre}</option>`).join("");
@@ -975,14 +1021,12 @@ async function confirmSale() {
   const registrado_por = document.getElementById("registrado-por").value;
   const medio_pago = window.__medioPago || "efectivo";
  
-  let subtotalTotal = 0, descuentoTotal = 0;
-  const lineas = items.map(([id, qty]) => {
-    const p = productos.find((pr) => pr.id === Number(id));
-    const { subtotal, descuento } = calcularLinea(p, qty);
-    subtotalTotal += p.precio_venta * qty;
-    descuentoTotal += descuento;
-    return { producto_id: p.id, cantidad: qty, precio_unitario: p.precio_venta, costo_unitario: p.costo_ultimo, descuento, subtotal };
-  });
+  const calculo = calcularCarritoPromos();
+  let subtotalTotal = calculo.subtotalTotal, descuentoTotal = calculo.descuentoTotal;
+  const lineas = calculo.lineas.map((l) => ({
+    producto_id: l.producto.id, cantidad: l.cantidad, precio_unitario: l.producto.precio_venta,
+    costo_unitario: l.producto.costo_ultimo, descuento: l.descuento, subtotal: l.subtotal,
+  }));
  
   // Líneas de helados armados
   heladoCart.forEach((h) => {
@@ -1048,38 +1092,91 @@ async function confirmSale() {
 // ---------- Edición / alta de productos ----------
 function openEditProduct(id) {
   const p = productos.find((pr) => pr.id === id);
+  const opcionesCategoria = categorias.map((c) => `<option value="${c.id}" ${c.id===p.categoria_id?"selected":""}>${c.nombre}</option>`).join("");
   showModal(`
-    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">${p.nombre}</p>
-    <p class="text-[12px] text-[#8a7d94] mb-4">${p.categorias?.nombre || ""}${p.presentacion ? " · " + p.presentacion : ""}</p>
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Editar producto</p>
     <div class="space-y-3">
       <div>
-        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Stock actual</label>
-        <input id="edit-stock" type="number" value="${p.stock}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Nombre</label>
+        <input id="edit-nombre" type="text" value="${p.nombre}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
       </div>
       <div>
-        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Stock mínimo</label>
-        <input id="edit-minimo" type="number" value="${p.stock_minimo}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Categoría</label>
+        <select id="edit-categoria" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none">${opcionesCategoria}</select>
       </div>
       <div>
-        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Precio de venta</label>
-        <input id="edit-precio" type="number" value="${p.precio_venta}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Presentación (opcional)</label>
+        <input id="edit-presentacion" type="text" value="${p.presentacion || ""}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
       </div>
-      <div>
-        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Costo (último)</label>
-        <input id="edit-costo" type="number" value="${p.costo_ultimo}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+      <label class="flex items-center gap-2">
+        <input type="checkbox" id="edit-es-insumo" ${p.es_insumo ? "checked" : ""} class="w-4 h-4" />
+        <span class="text-[13px] text-[#241C2E]">Es un insumo (no se vende directo)</span>
+      </label>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Stock actual</label>
+          <input id="edit-stock" type="number" value="${p.stock}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+        </div>
+        <div>
+          <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Stock mínimo</label>
+          <input id="edit-minimo" type="number" value="${p.stock_minimo}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+        </div>
+        <div>
+          <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Precio de venta</label>
+          <input id="edit-precio" type="number" value="${p.precio_venta}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+        </div>
+        <div>
+          <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Costo (último)</label>
+          <input id="edit-costo" type="number" value="${p.costo_ultimo}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+        </div>
       </div>
     </div>
     <button onclick="saveEditProduct(${p.id})" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3 mt-5">Guardar cambios</button>
+    ${p.nombre === "Hielo · Bolsa" ? `
+    <div class="bg-[#F7F3FA] rounded-xl p-3 mt-3">
+      <p class="text-[12px] font-semibold text-[#241C2E] mb-2">Cargar bolsitas con agua</p>
+      <p class="text-[11px] text-[#8a7d94] mb-2">Convierte bolsitas vacías en hielo listo para vender.</p>
+      <div class="flex items-center gap-2">
+        <input id="cargar-hielo-cantidad" type="number" value="1" class="flex-1 bg-white rounded-lg px-3 py-2 text-[14px] outline-none" />
+        <button onclick="cargarHielo()" class="bg-[#6B2D5C] text-white text-[12px] font-semibold px-3 py-2 rounded-lg">Cargar</button>
+      </div>
+    </div>` : ""}
+    <button onclick="deleteProduct(${p.id})" class="w-full text-[#D64545] text-[13px] font-semibold py-3 mt-1">Eliminar producto</button>
   `);
 }
  
+async function cargarHielo() {
+  const cantidad = Number(document.getElementById("cargar-hielo-cantidad").value) || 0;
+  if (cantidad <= 0) return;
+  const bolsita = productos.find((p) => p.nombre === "Bolsita de Hielo");
+  const hielo = productos.find((p) => p.nombre === "Hielo · Bolsa");
+  if (!bolsita || !hielo) { alert("Falta cargar 'Bolsita de Hielo' o 'Hielo · Bolsa' en productos."); return; }
+  if (bolsita.stock < cantidad) { alert(`Solo quedan ${bolsita.stock} bolsitas vacías.`); return; }
+  await sb.from("productos").update({ stock: bolsita.stock - cantidad }).eq("id", bolsita.id);
+  await sb.from("productos").update({ stock: hielo.stock + cantidad }).eq("id", hielo.id);
+  closeModal();
+  await loadAll();
+}
+ 
 async function saveEditProduct(id) {
+  const nombre = document.getElementById("edit-nombre").value.trim();
+  const categoria_id = Number(document.getElementById("edit-categoria").value);
+  const presentacion = document.getElementById("edit-presentacion").value.trim() || null;
+  const es_insumo = document.getElementById("edit-es-insumo").checked;
   const stock = Number(document.getElementById("edit-stock").value);
   const stock_minimo = Number(document.getElementById("edit-minimo").value);
   const precio_venta = Number(document.getElementById("edit-precio").value);
   const costo_ultimo = Number(document.getElementById("edit-costo").value);
-  const { error } = await sb.from("productos").update({ stock, stock_minimo, precio_venta, costo_ultimo }).eq("id", id);
+  const { error } = await sb.from("productos").update({ nombre, categoria_id, presentacion, es_insumo, stock, stock_minimo, precio_venta, costo_ultimo }).eq("id", id);
   if (error) { alert("No se pudo guardar."); console.error(error); return; }
+  closeModal();
+  await loadAll();
+}
+ 
+async function deleteProduct(id) {
+  if (!confirm("¿Eliminar este producto? Ya no va a aparecer en la app, pero se conserva en el historial de ventas pasadas.")) return;
+  const { error } = await sb.from("productos").update({ activo: false }).eq("id", id);
+  if (error) { alert("No se pudo eliminar."); console.error(error); return; }
   closeModal();
   await loadAll();
 }
