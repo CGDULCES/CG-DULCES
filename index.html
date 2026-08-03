@@ -708,13 +708,17 @@ function renderClienteDetalle(content) {
   const cliente = clientes.find((c) => c.id === window.__clienteDetalleId);
   if (!cliente) { content.innerHTML = ""; return; }
   const ventas = window.__clienteDetalleVentas;
-  const deudaTotal = ventas.filter((v) => v.es_fiado).reduce((s, v) => s + Number(v.total) - pagadoDeVenta(v.id), 0);
+  const totalVentasFiado = ventas.filter((v) => v.es_fiado).reduce((s, v) => s + Number(v.total), 0);
+  const totalPagosTodos = window.__clienteDetalleCobros.reduce((s, c) => s + Number(c.monto), 0);
+  const deudaTotal = totalVentasFiado - totalPagosTodos;
+  const pagosSinVenta = window.__clienteDetalleCobros.filter((c) => !c.venta_id).reduce((s, c) => s + Number(c.monto), 0);
  
   content.innerHTML = `
     <button onclick="irA('clientes')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver a Clientes</button>
     <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
       <p class="font-display text-[18px] font-semibold text-[#241C2E]">${cliente.nombre}</p>
       <p class="text-[13px] mt-1 ${deudaTotal > 0 ? 'text-[#D64545] font-semibold' : 'text-[#2F9E7A] font-semibold'}">${deudaTotal > 0 ? `Debe en total ${fmt(deudaTotal)}` : "Sin deuda pendiente"}</p>
+      ${pagosSinVenta > 0 ? `<p class="text-[11px] text-[#8a7d94] mt-1">Incluye ${fmt(pagosSinVenta)} en pagos generales de antes, sin venta puntual asociada</p>` : ""}
     </div>
  
     ${sectionLabel("Historial de compras")}
@@ -1596,5 +1600,3 @@ checkSession();
 </body>
 </html>
  
-
-
