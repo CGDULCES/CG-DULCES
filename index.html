@@ -23,7 +23,7 @@
 <body class="min-h-screen w-full flex items-start justify-center p-0 sm:p-4">
  
 <!-- Pantalla de login -->
-<div id="login-screen" class="relative w-full max-w-[460px] sm:h-[860px] sm:rounded-[2.25rem] sm:shadow-2xl sm:border sm:border-black/5 bg-[#F7F3FA] overflow-hidden flex flex-col min-h-screen">
+<div id="login-screen" class="relative w-full max-w-[460px] md:max-w-[720px] lg:max-w-[900px] sm:h-[860px] md:h-[80vh] sm:rounded-[2.25rem] sm:shadow-2xl sm:border sm:border-black/5 bg-[#F7F3FA] overflow-hidden flex flex-col min-h-screen">
   <div class="flex-1 flex flex-col items-center justify-center px-8">
     <p class="font-display text-[28px] font-semibold text-[#6B2D5C] mb-1">CG Dulces</p>
     <p class="text-[13px] text-[#8a7d94] mb-8">Ingresá para ver el panel del negocio</p>
@@ -41,7 +41,7 @@
 </div>
  
 <!-- App -->
-<div id="app-screen" class="screen-hidden relative w-full max-w-[460px] sm:h-[860px] sm:rounded-[2.25rem] sm:shadow-2xl sm:border sm:border-black/5 bg-[#F7F3FA] overflow-hidden flex flex-col min-h-screen">
+<div id="app-screen" class="screen-hidden relative w-full max-w-[460px] md:max-w-[720px] lg:max-w-[900px] sm:h-[860px] md:h-[80vh] sm:rounded-[2.25rem] sm:shadow-2xl sm:border sm:border-black/5 bg-[#F7F3FA] overflow-hidden flex flex-col min-h-screen">
  
   <!-- Encabezado -->
   <div class="px-6 pt-6 pb-4 bg-[#6B2D5C] text-white shrink-0">
@@ -278,9 +278,7 @@ function renderDashboard(content) {
  
   content.innerHTML = `
     <div class="space-y-5">
-      <div class="grid grid-cols-2 gap-3">
-        <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
-          <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Ventas de hoy</p>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
           <p class="font-mono-num text-[19px] font-semibold text-[#241C2E]">${fmt(total)}</p>
         </div>
         <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
@@ -350,9 +348,7 @@ function renderVender(content) {
   content.innerHTML = Object.entries(grupos).map(([cat, lista]) => `
     <div class="mb-5">
       ${sectionLabel(cat)}
-      <div class="grid grid-cols-2 gap-3">
-        ${lista.map((p) => {
-          const qty = cart[p.id] || 0;
+      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           const color = categoryColors[cat] || "#6B2D5C";
           const promo = promoDe(p.id);
           const { subtotal } = calcularLinea(p, qty || 1);
@@ -634,3 +630,5 @@ checkSession();
 </body>
 </html>
  
+
+
