@@ -349,6 +349,8 @@ function renderVender(content) {
     <div class="mb-5">
       ${sectionLabel(cat)}
       <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+        ${lista.map((p) => {
+          const qty = cart[p.id] || 0;
           const color = categoryColors[cat] || "#6B2D5C";
           const promo = promoDe(p.id);
           const { subtotal } = calcularLinea(p, qty || 1);
