@@ -113,7 +113,6 @@ let usuarios = [];
 let ventasHistoricas = [];
 let proveedores = [];
 let compras = [];
-let gastos = [];
 let cart = {};
 let heladoCart = []; // ventas armadas de helado: { id, tipo: 'bola'|'pote14', bolas: [productoId,...], envaseId, cobertura, total }
 let activeTab = "dashboard";
@@ -154,7 +153,7 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
  
 // ---------- Carga de datos ----------
 async function loadAll() {
-  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras(), loadGastos()]);
+  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras()]);
   render();
 }
  
@@ -167,17 +166,11 @@ async function loadProveedores() {
 async function loadCompras() {
   const { data, error } = await sb
     .from("compras")
-    .select("id, tipo, total, comprobante_url, registrado_por, created_at, proveedores(nombre), compra_items(cantidad, costo_unitario, productos(nombre))")
+    .select("id, proveedor_id, tipo, total, comprobante_url, registrado_por, created_at, proveedores(nombre), compra_items(id, producto_id, cantidad, costo_unitario, productos(nombre, presentacion))")
     .order("created_at", { ascending: false })
     .limit(30);
   if (error) { console.error(error); return; }
   compras = data;
-}
- 
-async function loadGastos() {
-  const { data, error } = await sb.from("gastos").select("*").order("created_at", { ascending: false }).limit(30);
-  if (error) { console.error(error); return; }
-  gastos = data;
 }
  
 async function loadCategorias() {
@@ -308,7 +301,7 @@ function sectionLabel(text) {
 // ---------- Render principal ----------
 function render() {
   const content = document.getElementById("content");
-  const submodulos = ["mas", "proveedores", "compras", "gastos"];
+  const submodulos = ["mas", "proveedores", "compras"];
   const grupoActivo = submodulos.includes(activeTab) ? "mas" : activeTab;
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === grupoActivo));
   document.getElementById("add-product-fab").classList.toggle("screen-hidden", activeTab !== "inventario");
@@ -320,7 +313,6 @@ function render() {
   if (activeTab === "mas") renderMas(content);
   if (activeTab === "proveedores") renderProveedores(content);
   if (activeTab === "compras") renderCompras(content);
-  if (activeTab === "gastos") renderGastos(content);
   renderCartBar();
 }
  
@@ -473,13 +465,26 @@ function renderVender(content) {
   content.innerHTML = html;
 }
  
+let inventarioVista = "productos"; // "productos" | "insumos"
+ 
 function renderInventario(content) {
-  const grupos = agruparPorCategoria(productos.filter((p) => p.categorias?.nombre !== HELADOS_OCULTO));
-  content.innerHTML = Object.entries(grupos).map(([cat, lista]) => `
+  const lista = inventarioVista === "insumos"
+    ? productos.filter((p) => p.es_insumo)
+    : productos.filter((p) => !p.es_insumo);
+  const grupos = agruparPorCategoria(lista);
+ 
+  let html = `
+    <div class="flex gap-2 mb-4">
+      <button onclick="cambiarVistaInventario('productos')" class="flex-1 rounded-xl py-2 text-[13px] font-semibold ${inventarioVista==='productos' ? 'bg-[#6B2D5C] text-white' : 'bg-white text-[#8a7d94] border border-black/[0.06]'}">Productos</button>
+      <button onclick="cambiarVistaInventario('insumos')" class="flex-1 rounded-xl py-2 text-[13px] font-semibold ${inventarioVista==='insumos' ? 'bg-[#6B2D5C] text-white' : 'bg-white text-[#8a7d94] border border-black/[0.06]'}">Insumos</button>
+    </div>
+  `;
+ 
+  html += Object.entries(grupos).map(([cat, itemsCat]) => `
     <div class="mb-5">
       ${sectionLabel(cat)}
       <div class="space-y-3">
-        ${lista.map((p) => {
+        ${itemsCat.map((p) => {
           const color = categoryColors[cat] || "#6B2D5C";
           const low = p.stock <= p.stock_minimo;
           const pct = p.stock_minimo > 0 ? Math.min(100, (p.stock / (p.stock_minimo * 3)) * 100) : 100;
@@ -487,8 +492,8 @@ function renderInventario(content) {
           <button onclick="openEditProduct(${p.id})" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
             <div class="flex items-center justify-between mb-2">
               <div>
-                <p class="text-[13px] font-semibold text-[#241C2E]">${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}${p.es_insumo ? ' <span class="text-[10px] text-[#8a7d94]">(insumo)</span>' : ""}</p>
-                <p class="text-[11px] text-[#8a7d94]">${cat} · costo ${fmt(p.costo_ultimo)} · venta ${fmt(p.precio_venta)}</p>
+                <p class="text-[13px] font-semibold text-[#241C2E]">${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</p>
+                <p class="text-[11px] text-[#8a7d94]">${cat} · costo ${fmt(p.costo_ultimo)}${p.es_insumo ? "" : " · venta " + fmt(p.precio_venta)}</p>
               </div>
               <div class="text-right">
                 <p class="font-mono-num text-[14px] font-semibold" style="color:${low?'#D64545':'#241C2E'}">${p.stock}</p>
@@ -503,6 +508,13 @@ function renderInventario(content) {
       </div>
     </div>
   `).join("");
+ 
+  content.innerHTML = html;
+}
+ 
+function cambiarVistaInventario(vista) {
+  inventarioVista = vista;
+  render();
 }
  
 // ---------- Más (menú de submódulos) ----------
@@ -516,10 +528,6 @@ function renderMas(content) {
       </button>
       <button onclick="irA('compras')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
         <span class="text-[14px] font-semibold text-[#241C2E]">Compras</span>
-        <span class="text-[#8a7d94]">›</span>
-      </button>
-      <button onclick="irA('gastos')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
-        <span class="text-[14px] font-semibold text-[#241C2E]">Gastos</span>
         <span class="text-[#8a7d94]">›</span>
       </button>
     </div>
@@ -582,27 +590,43 @@ function renderCompras(content) {
     <div class="space-y-2 mb-4">
       ${compras.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Todavía no registraste compras.</p>` :
         compras.map((c) => `
-        <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+        <button onclick="openEditCompra(${c.id})" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
           <div class="flex items-center justify-between mb-1">
             <span class="text-[13px] font-semibold text-[#241C2E]">${c.proveedores?.nombre || "Sin proveedor"}</span>
             <span class="font-mono-num text-[13px] font-semibold">${fmt(c.total)}</span>
           </div>
           <p class="text-[11px] text-[#8a7d94]">${c.tipo === "insumos" ? "Insumos" : "Mercadería"} · ${new Date(c.created_at).toLocaleDateString("es-PY")}</p>
           <p class="text-[12px] text-[#241C2E] mt-1">${(c.compra_items||[]).map(it=>`${it.cantidad}× ${it.productos?.nombre||""}`).join(", ")}</p>
-        </div>`).join("")}
+        </button>`).join("")}
     </div>
     <button onclick="openNewCompra()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">+ Nueva compra</button>
   `;
 }
  
+window.__editingCompraId = null;
+window.__originalCompraItems = [];
+ 
 function openNewCompra() {
+  window.__editingCompraId = null;
+  window.__originalCompraItems = [];
   window.__compraItems = [{ producto_id: productos[0]?.id, cantidad: 1, costo_unitario: 0 }];
   renderCompraModal();
 }
  
+function openEditCompra(id) {
+  const c = compras.find((cc) => cc.id === id);
+  if (!c) return;
+  window.__editingCompraId = id;
+  window.__compraItems = (c.compra_items || []).map((it) => ({ id: it.id, producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario }));
+  window.__originalCompraItems = JSON.parse(JSON.stringify(window.__compraItems));
+  window.__editingProveedorId = c.proveedor_id;
+  window.__editingTipo = c.tipo;
+  renderCompraModal();
+}
+ 
 function renderCompraModal() {
-  const opcionesProveedor = proveedores.map((p) => `<option value="${p.id}">${p.nombre}</option>`).join("");
-  const opcionesProducto = productos.map((p) => `<option value="${p.id}">${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</option>`).join("");
+  const editando = !!window.__editingCompraId;
+  const opcionesProveedor = proveedores.map((p) => `<option value="${p.id}" ${editando && window.__editingProveedorId===p.id ? "selected":""}>${p.nombre}</option>`).join("");
   const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
  
   const filasHtml = window.__compraItems.map((it, i) => `
@@ -625,14 +649,14 @@ function renderCompraModal() {
   `).join("");
  
   showModal(`
-    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Nueva compra</p>
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">${editando ? "Editar compra" : "Nueva compra"}</p>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Proveedor</label>
     <select id="compra-proveedor" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">${opcionesProveedor}</select>
  
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Tipo</label>
     <select id="compra-tipo" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none">
-      <option value="mercaderia">Mercadería</option>
-      <option value="insumos">Insumos</option>
+      <option value="mercaderia" ${editando && window.__editingTipo==='mercaderia' ? "selected":""}>Mercadería</option>
+      <option value="insumos" ${editando && window.__editingTipo==='insumos' ? "selected":""}>Insumos</option>
     </select>
  
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Productos comprados</label>
@@ -644,12 +668,13 @@ function renderCompraModal() {
       <span class="font-mono-num text-[18px] font-semibold text-[#241C2E]">${fmt(total)}</span>
     </div>
  
-    <button onclick="saveNewCompra()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Registrar compra</button>
+    <button onclick="${editando ? "saveEditCompra()" : "saveNewCompra()"}" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">${editando ? "Guardar cambios" : "Registrar compra"}</button>
+    ${editando ? `<button onclick="deleteCompra()" class="w-full text-[#D64545] text-[13px] font-semibold py-3 mt-1">Eliminar esta compra</button>` : ""}
   `);
 }
  
 function cambiarItemCompra(i, campo, valor) {
-  window.__compraItems[i][campo] = campo === "producto_id" ? Number(valor) : Number(valor);
+  window.__compraItems[i][campo] = Number(valor);
   renderCompraModal();
 }
 function agregarItemCompra() {
@@ -689,86 +714,61 @@ async function saveNewCompra() {
   render();
 }
  
-// ---------- Gastos ----------
-function renderGastos(content) {
-  content.innerHTML = `
-    <button onclick="irA('mas')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
-    ${sectionLabel("Gastos registrados")}
-    <div class="space-y-2 mb-4">
-      ${gastos.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Todavía no registraste gastos.</p>` :
-        gastos.map((g) => `
-        <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center gap-3">
-          ${g.comprobante_url ? `<a href="${g.comprobante_url}" target="_blank"><img src="${g.comprobante_url}" class="w-12 h-12 rounded-lg object-cover shrink-0" /></a>` : `<div class="w-12 h-12 rounded-lg bg-[#F7F3FA] shrink-0"></div>`}
-          <div class="flex-1 min-w-0">
-            <p class="text-[13px] font-semibold text-[#241C2E] truncate">${g.categoria}</p>
-            <p class="text-[11px] text-[#8a7d94] truncate">${g.descripcion || ""} · ${new Date(g.created_at).toLocaleDateString("es-PY")}</p>
-          </div>
-          <span class="font-mono-num text-[13px] font-semibold shrink-0">${fmt(g.monto)}</span>
-        </div>`).join("")}
-    </div>
-    <button onclick="openNewGasto()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">+ Nuevo gasto</button>
-  `;
-}
+async function saveEditCompra() {
+  const proveedor_id = Number(document.getElementById("compra-proveedor").value) || null;
+  const tipo = document.getElementById("compra-tipo").value;
+  const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+  const compraId = window.__editingCompraId;
  
-function openNewGasto() {
-  showModal(`
-    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Nuevo gasto</p>
-    <div class="space-y-3">
-      <div>
-        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Categoría</label>
-        <select id="gasto-categoria" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none">
-          <option value="Compra de productos">Compra de productos</option>
-          <option value="Insumos de fabricación">Insumos de fabricación</option>
-          <option value="Otro">Otro</option>
-        </select>
-      </div>
-      <div>
-        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Descripción</label>
-        <input id="gasto-descripcion" type="text" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
-      </div>
-      <div>
-        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto</label>
-        <input id="gasto-monto" type="number" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
-      </div>
-      <div>
-        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Foto del comprobante (opcional)</label>
-        <input id="gasto-foto" type="file" accept="image/*" capture="environment" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[13px] mt-1 outline-none" />
-      </div>
-    </div>
-    <button id="gasto-guardar-btn" onclick="saveNewGasto()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3 mt-5">Guardar gasto</button>
-  `);
-}
- 
-async function saveNewGasto() {
-  const btn = document.getElementById("gasto-guardar-btn");
-  const categoria = document.getElementById("gasto-categoria").value;
-  const descripcion = document.getElementById("gasto-descripcion").value.trim() || null;
-  const monto = Number(document.getElementById("gasto-monto").value) || 0;
-  const registrado_por = usuarios[0]?.nombre || "";
-  const archivo = document.getElementById("gasto-foto").files[0];
- 
-  btn.textContent = "Guardando...";
-  btn.disabled = true;
- 
-  let comprobante_url = null;
-  if (archivo) {
-    const nombreArchivo = `${Date.now()}-${archivo.name}`;
-    const { error: uploadError } = await sb.storage.from("comprobantes").upload(nombreArchivo, archivo);
-    if (uploadError) {
-      alert("No se pudo subir la foto, pero podés guardar el gasto sin ella.");
-      console.error(uploadError);
+  // Items que ya existían: ajustar el stock por la diferencia y actualizar la fila
+  for (const it of window.__compraItems) {
+    if (it.id) {
+      const original = window.__originalCompraItems.find((o) => o.id === it.id);
+      const delta = it.cantidad - (original?.cantidad || 0);
+      const p = productos.find((pr) => pr.id === it.producto_id);
+      if (p) await sb.from("productos").update({ stock: p.stock + delta, costo_ultimo: it.costo_unitario }).eq("id", p.id);
+      await sb.from("compra_items").update({ producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario }).eq("id", it.id);
     } else {
-      const { data } = sb.storage.from("comprobantes").getPublicUrl(nombreArchivo);
-      comprobante_url = data.publicUrl;
+      // Línea nueva agregada durante la edición
+      const p = productos.find((pr) => pr.id === it.producto_id);
+      if (p) await sb.from("productos").update({ stock: p.stock + it.cantidad, costo_ultimo: it.costo_unitario }).eq("id", p.id);
+      await sb.from("compra_items").insert({ compra_id: compraId, producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario });
     }
   }
  
-  const { error } = await sb.from("gastos").insert({ categoria, descripcion, monto, comprobante_url, registrado_por });
-  if (error) { alert("No se pudo guardar el gasto."); console.error(error); return; }
+  // Líneas que existían antes y se quitaron: revertir el stock que habían sumado
+  for (const original of window.__originalCompraItems) {
+    const sigueExistiendo = window.__compraItems.some((it) => it.id === original.id);
+    if (!sigueExistiendo) {
+      const p = productos.find((pr) => pr.id === original.producto_id);
+      if (p) await sb.from("productos").update({ stock: p.stock - original.cantidad }).eq("id", p.id);
+      await sb.from("compra_items").delete().eq("id", original.id);
+    }
+  }
  
+  await sb.from("compras").update({ proveedor_id, tipo, total }).eq("id", compraId);
+ 
+  window.__editingCompraId = null;
+  window.__compraItems = [];
   closeModal();
   await loadAll();
-  activeTab = "gastos";
+  activeTab = "compras";
+  render();
+}
+ 
+async function deleteCompra() {
+  if (!confirm("¿Eliminar esta compra? Se va a descontar del stock lo que había sumado.")) return;
+  for (const it of window.__originalCompraItems) {
+    const p = productos.find((pr) => pr.id === it.producto_id);
+    if (p) await sb.from("productos").update({ stock: p.stock - it.cantidad }).eq("id", p.id);
+  }
+  await sb.from("compras").delete().eq("id", window.__editingCompraId);
+ 
+  window.__editingCompraId = null;
+  window.__compraItems = [];
+  closeModal();
+  await loadAll();
+  activeTab = "compras";
   render();
 }
  
