@@ -366,7 +366,7 @@ function sectionLabel(text) {
 // ---------- Render principal ----------
 function render() {
   const content = document.getElementById("content");
-  const submodulos = ["mas", "proveedores", "compras", "clientes"];
+  const submodulos = ["mas", "proveedores", "compras", "clientes", "cliente-detalle"];
   const grupoActivo = submodulos.includes(activeTab) ? "mas" : activeTab;
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === grupoActivo));
   document.getElementById("add-product-fab").classList.toggle("screen-hidden", activeTab !== "inventario");
@@ -378,6 +378,7 @@ function render() {
   if (activeTab === "mas") renderMas(content);
   if (activeTab === "proveedores") renderProveedores(content);
   if (activeTab === "clientes") renderClientes(content);
+  if (activeTab === "cliente-detalle") renderClienteDetalle(content);
   if (activeTab === "compras") renderCompras(content);
   renderCartBar();
 }
@@ -670,20 +671,170 @@ function renderClientes(content) {
           const deuda = deudaCliente(c.id);
           const comprado = totalCompradoCliente(c.id);
           return `
-          <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+          <button onclick="abrirClienteDetalle(${c.id})" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
             <div class="flex items-center justify-between mb-1">
               <span class="text-[13px] font-semibold text-[#241C2E]">${c.nombre}</span>
               <span class="font-mono-num text-[12px] text-[#8a7d94]">total ${fmt(comprado)}</span>
             </div>
-            <div class="flex items-center justify-between">
-              <span class="text-[12px] ${deuda > 0 ? 'text-[#D64545] font-semibold' : 'text-[#8a7d94]'}">${deuda > 0 ? `Debe ${fmt(deuda)}` : "Sin deuda"}</span>
-              ${deuda > 0 ? `<button onclick="openCobro(${c.id})" class="text-[12px] text-[#2F9E7A] font-semibold">Cobrar</button>` : ""}
-            </div>
-          </div>`;
+            <span class="text-[12px] ${deuda > 0 ? 'text-[#D64545] font-semibold' : 'text-[#8a7d94]'}">${deuda > 0 ? `Debe ${fmt(deuda)}` : "Sin deuda"}</span>
+          </button>`;
         }).join("")}
     </div>
     <button onclick="openNewCliente()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">+ Nuevo cliente</button>
   `;
+}
+ 
+// ---------- Perfil de cliente: historial y cobro por venta ----------
+window.__clienteDetalleId = null;
+window.__clienteDetalleVentas = [];
+window.__clienteDetalleCobros = [];
+window.__clienteSeleccionadas = new Set();
+ 
+async function abrirClienteDetalle(clienteId) {
+  window.__clienteDetalleId = clienteId;
+  window.__clienteSeleccionadas = new Set();
+  const [{ data: ventasCliente }, { data: cobrosCliente }] = await Promise.all([
+    sb.from("ventas").select("id, total, es_fiado, medio_pago, created_at, venta_items(cantidad, productos(nombre))").eq("cliente_id", clienteId).order("created_at", { ascending: false }),
+    sb.from("cobros").select("*").eq("cliente_id", clienteId).order("created_at", { ascending: false }),
+  ]);
+  window.__clienteDetalleVentas = ventasCliente || [];
+  window.__clienteDetalleCobros = cobrosCliente || [];
+  activeTab = "cliente-detalle";
+  render();
+}
+ 
+function pagadoDeVenta(ventaId) {
+  return window.__clienteDetalleCobros.filter((c) => c.venta_id === ventaId).reduce((s, c) => s + Number(c.monto), 0);
+}
+ 
+function renderClienteDetalle(content) {
+  const cliente = clientes.find((c) => c.id === window.__clienteDetalleId);
+  if (!cliente) { content.innerHTML = ""; return; }
+  const ventas = window.__clienteDetalleVentas;
+  const deudaTotal = deudaCliente(cliente.id);
+ 
+  content.innerHTML = `
+    <button onclick="irA('clientes')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver a Clientes</button>
+    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
+      <p class="font-display text-[18px] font-semibold text-[#241C2E]">${cliente.nombre}</p>
+      <p class="text-[13px] mt-1 ${deudaTotal > 0 ? 'text-[#D64545] font-semibold' : 'text-[#2F9E7A] font-semibold'}">${deudaTotal > 0 ? `Debe en total ${fmt(deudaTotal)}` : "Sin deuda pendiente"}</p>
+    </div>
+ 
+    ${sectionLabel("Historial de compras")}
+    <div class="space-y-2 mb-4">
+      ${ventas.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Todavía no tiene compras registradas.</p>` :
+        ventas.map((v) => {
+          const pagado = pagadoDeVenta(v.id);
+          const pendiente = v.es_fiado ? Math.max(0, v.total - pagado) : 0;
+          const fechaHora = new Date(v.created_at).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+          const itemsTexto = (v.venta_items || []).map((it) => `${it.cantidad}× ${it.productos?.nombre || ""}`).join(", ");
+          const seleccionable = v.es_fiado && pendiente > 0;
+          return `
+          <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+            <div class="flex items-start gap-2.5">
+              ${seleccionable ? `<input type="checkbox" onchange="toggleSeleccionVenta(${v.id}, this.checked)" ${window.__clienteSeleccionadas.has(v.id) ? "checked" : ""} class="w-4 h-4 mt-0.5 shrink-0" />` : `<span class="w-4 shrink-0"></span>`}
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="text-[11px] text-[#8a7d94]">${fechaHora}</span>
+                  <span class="font-mono-num text-[13px] font-semibold">${fmt(v.total)}</span>
+                </div>
+                <p class="text-[13px] text-[#241C2E] mt-0.5">${itemsTexto}</p>
+                <div class="flex items-center justify-between mt-1.5">
+                  ${!v.es_fiado
+                    ? `<span class="text-[11px] text-[#8a7d94]">Pagado al contado (${v.medio_pago})</span>`
+                    : pendiente <= 0
+                      ? `<span class="text-[11px] text-[#2F9E7A] font-semibold">✓ Pagado</span>`
+                      : `<span class="text-[11px] text-[#D64545] font-semibold">Pendiente ${fmt(pendiente)}</span>`}
+                  ${seleccionable ? `<button onclick="openCobroVenta(${v.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Cobrar esta</button>` : ""}
+                </div>
+              </div>
+            </div>
+          </div>`;
+        }).join("")}
+    </div>
+  `;
+ 
+  if (window.__clienteSeleccionadas.size > 0) {
+    const totalSeleccion = [...window.__clienteSeleccionadas].reduce((s, id) => {
+      const v = ventas.find((vv) => vv.id === id);
+      return s + (v.total - pagadoDeVenta(id));
+    }, 0);
+    content.innerHTML += `
+      <div class="bg-[#241C2E] rounded-2xl px-4 py-3 flex items-center justify-between sticky bottom-0">
+        <div>
+          <p class="text-white/60 text-[11px]">${window.__clienteSeleccionadas.size} venta(s) elegidas</p>
+          <p class="text-white font-mono-num text-[15px] font-semibold">${fmt(totalSeleccion)}</p>
+        </div>
+        <button onclick="openCobroSeleccionadas()" class="bg-[#2F9E7A] text-white text-[12px] font-semibold px-3.5 py-2.5 rounded-xl">Cobrar seleccionadas</button>
+      </div>
+    `;
+  }
+}
+ 
+function toggleSeleccionVenta(ventaId, checked) {
+  if (checked) window.__clienteSeleccionadas.add(ventaId);
+  else window.__clienteSeleccionadas.delete(ventaId);
+  render();
+}
+ 
+function openCobroVenta(ventaId) {
+  const v = window.__clienteDetalleVentas.find((vv) => vv.id === ventaId);
+  const pendiente = v.total - pagadoDeVenta(ventaId);
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Cobrar esta venta</p>
+    <p class="text-[12px] text-[#8a7d94] mb-4">Pendiente ${fmt(pendiente)}</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto que paga ahora</label>
+    <input id="cobroventa-monto" type="number" value="${pendiente}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Forma de pago</label>
+    <select id="cobroventa-medio" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none">
+      <option value="efectivo">Efectivo</option>
+      <option value="transferencia">Transferencia</option>
+      <option value="qr">QR</option>
+    </select>
+    <button onclick="saveCobroVenta(${ventaId})" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Registrar cobro</button>
+  `);
+}
+ 
+async function saveCobroVenta(ventaId) {
+  const monto = Number(document.getElementById("cobroventa-monto").value) || 0;
+  if (monto <= 0) return;
+  const medio_pago = document.getElementById("cobroventa-medio").value;
+  const registrado_por = usuarios[0]?.nombre || "";
+  const clienteId = window.__clienteDetalleId;
+  const { error } = await sb.from("cobros").insert({ cliente_id: clienteId, venta_id: ventaId, monto, medio_pago, registrado_por });
+  if (error) { alert("No se pudo registrar el cobro."); console.error(error); return; }
+  closeModal();
+  await loadAll();
+  await abrirClienteDetalle(clienteId);
+}
+ 
+function openCobroSeleccionadas() {
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Cobrar ventas seleccionadas</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Forma de pago</label>
+    <select id="cobrosel-medio" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none">
+      <option value="efectivo">Efectivo</option>
+      <option value="transferencia">Transferencia</option>
+      <option value="qr">QR</option>
+    </select>
+    <button onclick="saveCobroSeleccionadas()" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Confirmar cobro</button>
+  `);
+}
+ 
+async function saveCobroSeleccionadas() {
+  const medio_pago = document.getElementById("cobrosel-medio").value;
+  const registrado_por = usuarios[0]?.nombre || "";
+  const clienteId = window.__clienteDetalleId;
+  const filas = [...window.__clienteSeleccionadas].map((ventaId) => {
+    const v = window.__clienteDetalleVentas.find((vv) => vv.id === ventaId);
+    const pendiente = v.total - pagadoDeVenta(ventaId);
+    return { cliente_id: clienteId, venta_id: ventaId, monto: pendiente, medio_pago, registrado_por };
+  });
+  const { error } = await sb.from("cobros").insert(filas);
+  if (error) { alert("No se pudo registrar el cobro."); console.error(error); return; }
+  closeModal();
+  await loadAll();
+  await abrirClienteDetalle(clienteId);
 }
  
 function openNewCliente() {
