@@ -1076,7 +1076,13 @@ function renderClienteDetalle(content) {
   content.innerHTML = `
     <button onclick="irA('clientes')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver a Clientes</button>
     <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
-      <p class="font-display text-[18px] font-semibold text-[#241C2E]">${cliente.nombre}</p>
+      <div class="flex items-center justify-between">
+        <p class="font-display text-[18px] font-semibold text-[#241C2E]">${cliente.nombre}</p>
+        <div class="flex items-center gap-3">
+          <button onclick="openEditCliente(${cliente.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar</button>
+          <button onclick="deleteCliente(${cliente.id})" class="text-[11px] text-[#D64545] font-semibold">Eliminar</button>
+        </div>
+      </div>
       <p class="text-[13px] mt-1 ${deudaTotal > 0 ? 'text-[#D64545] font-semibold' : 'text-[#2F9E7A] font-semibold'}">${deudaTotal > 0 ? `Debe en total ${fmt(deudaTotal)}` : "Sin deuda pendiente"}</p>
       ${pagosSinVenta > 0 ? `<p class="text-[11px] text-[#8a7d94] mt-1">Aparte, hay ${fmt(pagosSinVenta)} en pagos viejos sin venta asociada (no están descontados de este total)</p>` : ""}
     </div>
@@ -1247,6 +1253,41 @@ async function saveCobroSeleccionadas() {
   closeModal();
   await loadAll();
   await abrirClienteDetalle(clienteId);
+}
+ 
+function openEditCliente(id) {
+  const c = clientes.find((cc) => cc.id === id);
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Editar cliente</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Nombre</label>
+    <input id="edit-cliente-nombre" type="text" value="${c.nombre}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
+    <button onclick="saveEditCliente(${id})" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Guardar cambios</button>
+  `);
+}
+async function saveEditCliente(id) {
+  const nombre = document.getElementById("edit-cliente-nombre").value.trim();
+  if (!nombre) { alert("Poné un nombre."); return; }
+  const { error } = await sb.from("clientes").update({ nombre }).eq("id", id);
+  if (error) { alert("No se pudo guardar."); console.error(error); return; }
+  await registrarHistorial("clientes", id, "editar", `Nombre editado a: ${nombre}`);
+  closeModal();
+  await loadAll();
+  await abrirClienteDetalle(id);
+}
+ 
+async function deleteCliente(id) {
+  const c = clientes.find((cc) => cc.id === id);
+  if (!confirm(`¿Eliminar a ${c?.nombre}? Esto no se puede deshacer.`)) return;
+  const { error } = await sb.from("clientes").delete().eq("id", id);
+  if (error) {
+    alert("No se pudo eliminar: este cliente ya tiene ventas o cobros registrados en su historial. Si te equivocaste en el nombre, mejor usá 'Editar'.");
+    console.error(error);
+    return;
+  }
+  await registrarHistorial("clientes", id, "eliminar", `Cliente eliminado: ${c?.nombre || ""}`);
+  await loadAll();
+  activeTab = "clientes";
+  render();
 }
  
 function openNewCliente() {
