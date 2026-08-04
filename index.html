@@ -144,7 +144,7 @@ function showLogin() {
 function showApp() {
   document.getElementById("login-screen").classList.add("screen-hidden");
   document.getElementById("app-screen").classList.remove("screen-hidden");
-  loadAll();
+  loadAll().then(verificarPrimeraVez);
 }
 document.getElementById("login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -586,7 +586,38 @@ function renderEstadoCaja() {
   return html;
 }
  
+async function verificarPrimeraVez() {
+  const { count } = await sb.from("caja").select("*", { count: "exact", head: true });
+  if (count === 0) mostrarCapitalInicial();
+}
+ 
+function mostrarCapitalInicial() {
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">¡Bienvenida a CG Dulces!</p>
+    <p class="text-[12px] text-[#8a7d94] mb-4">Antes de arrancar, decime con cuánto capital empezás.</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Efectivo</label>
+    <input id="capital-efectivo" type="number" value="0" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cuenta bancaria</label>
+    <input id="capital-banco" type="number" value="0" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
+    <button onclick="crearCajaInicial()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Empezar</button>
+  `);
+}
+ 
+async function crearCajaInicial() {
+  const apertura_efectivo = Number(document.getElementById("capital-efectivo").value) || 0;
+  const apertura_banco = Number(document.getElementById("capital-banco").value) || 0;
+  const registrado_por = usuarios[0]?.nombre || "";
+  const { data, error } = await sb.from("caja").insert({ apertura_efectivo, apertura_banco, registrado_por, estado: "abierta" }).select().single();
+  if (error) { alert("No se pudo iniciar la caja."); console.error(error); return; }
+  await registrarHistorial("caja", data.id, "crear", `Capital inicial del sistema — efectivo ${fmt(apertura_efectivo)}, banco ${fmt(apertura_banco)}`);
+  closeModal();
+  await loadAll();
+}
+ 
 async function abrirCaja() {
+  const { count } = await sb.from("caja").select("*", { count: "exact", head: true });
+  if (count === 0) { mostrarCapitalInicial(); return; }
+ 
   const registrado_por = usuarios[0]?.nombre || "";
   // Repone automáticamente lo que quedó al cerrar la última caja
   const { data: ultimaCerrada } = await sb.from("caja").select("*").eq("estado", "cerrada").order("fecha_cierre", { ascending: false }).limit(1);
