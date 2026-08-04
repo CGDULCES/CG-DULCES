@@ -1559,6 +1559,25 @@ function factorConversion(p) {
   return p?.equivalencia_bolas || 1;
 }
  
+// Consumo ilimitado reutilizable: mientras el paquete/balde esté abierto, no hay tope.
+// Si no hay ninguno abierto, exige que haya al menos 1 en stock para "abrirlo".
+function validarConsumoIlimitado(producto, necesario) {
+  if (!producto || necesario === 0) return { ok: true };
+  if (Number(producto.bolas_vendidas_actual || 0) === 0 && Number(producto.stock) <= 0) {
+    return { ok: false, mensaje: `No hay más "${producto.presentacion || producto.nombre}" disponible. Comprá o reponé el insumo antes de usarlo.` };
+  }
+  return { ok: true };
+}
+async function aplicarConsumoIlimitado(producto, cantidadNecesaria) {
+  if (!producto || cantidadNecesaria === 0) return;
+  const actual = Number(producto.bolas_vendidas_actual || 0);
+  if (actual === 0) {
+    await sb.from("productos").update({ stock: producto.stock - 1, bolas_vendidas_actual: cantidadNecesaria }).eq("id", producto.id);
+  } else {
+    await sb.from("productos").update({ bolas_vendidas_actual: actual + cantidadNecesaria }).eq("id", producto.id);
+  }
+}
+ 
 async function saveNewCompra() {
   const proveedor_id = Number(document.getElementById("compra-proveedor").value) || null;
   const tipo = document.getElementById("compra-tipo").value;
@@ -1994,27 +2013,32 @@ async function confirmSale() {
     const servilleta = insumoPorNombre("Servilleta");
     const cobertura = insumoPorNombre("Cobertura");
     const poteIsopor = insumoPorNombre("Pote de Isopor 1/4");
+    let cucharitaNecesario = 0, servilletaNecesario = 0, coberturaNecesario = 0;
     heladoCart.forEach((h) => {
       h.bolas.forEach((saborId) => { bolasPorBalde[saborId] = (bolasPorBalde[saborId] || 0) + 1; });
       if (h.tipo === "bola" && h.envaseId) sumarNecesario(h.envaseId, 1);
       if (h.tipo === "pote14" && poteIsopor) sumarNecesario(poteIsopor.id, 1);
-      if (cucharita) sumarNecesario(cucharita.id, 1);
-      if (servilleta) sumarNecesario(servilleta.id, 1);
-      if (h.cobertura && cobertura) sumarNecesario(cobertura.id, 1);
+      cucharitaNecesario += 1;
+      servilletaNecesario += 1;
+      if (h.cobertura) coberturaNecesario += 1;
     });
-    // Envase, cucharita, servilleta, cobertura y pote: siguen con stock normal (limitado)
+    // Envase y pote: siguen con stock normal (limitado)
     for (const [id, necesario] of Object.entries(necesarioPorId)) {
       const p = productos.find((pr) => pr.id === Number(id));
       if (p && necesario > p.stock) { alert(`No hay suficiente stock de "${p.nombre}". Disponible: ${p.stock}, necesitás ${necesario}.`); return; }
     }
-    // Baldes de helado: bolas ilimitadas mientras el balde esté abierto; solo bloquea si no hay ningún balde para abrir
+    // Baldes, cucharita, servilleta y cobertura: uso ilimitado mientras haya un paquete/balde abierto
+    const validarIlimitado = (producto, necesario) => {
+      const r = validarConsumoIlimitado(producto, necesario);
+      if (!r.ok) alert(r.mensaje);
+      return r.ok;
+    };
     for (const saborId of Object.keys(bolasPorBalde)) {
-      const p = productos.find((pr) => pr.id === Number(saborId));
-      if (p && Number(p.bolas_vendidas_actual || 0) === 0 && Number(p.stock) <= 0) {
-        alert(`No hay baldes de "${p.presentacion || p.nombre}" disponibles. Cargá stock o marcá el balde anterior como terminado.`);
-        return;
-      }
+      if (!validarIlimitado(productos.find((pr) => pr.id === Number(saborId)), bolasPorBalde[saborId])) return;
     }
+    if (!validarIlimitado(cucharita, cucharitaNecesario)) return;
+    if (!validarIlimitado(servilleta, servilletaNecesario)) return;
+    if (!validarIlimitado(cobertura, coberturaNecesario)) return;
   }
  
   const calculo = calcularCarritoPromos();
@@ -2070,24 +2094,23 @@ async function confirmSale() {
   const cobertura = insumoPorNombre("Cobertura");
   const poteIsopor = insumoPorNombre("Pote de Isopor 1/4");
  
-  // Bolas totales por sabor en toda la venta (para abrir el balde una sola vez si hace falta)
+  // Bolas totales por sabor en toda la venta
   const bolasPorSaborTotal = {};
   heladoCart.forEach((h) => h.bolas.forEach((id) => { bolasPorSaborTotal[id] = (bolasPorSaborTotal[id] || 0) + 1; }));
   for (const [saborId, cant] of Object.entries(bolasPorSaborTotal)) {
-    const balde = productos.find((p) => p.id === Number(saborId));
-    if (!balde) continue;
-    const actual = Number(balde.bolas_vendidas_actual || 0);
-    if (actual === 0) {
-      // No había un balde abierto: se abre uno nuevo (resta 1 del stock físico) y arranca el contador
-      await sb.from("productos").update({ stock: balde.stock - 1, bolas_vendidas_actual: cant }).eq("id", balde.id);
-    } else {
-      // Ya había un balde abierto: se suman las bolas, sin tocar el stock físico (ilimitado)
-      await sb.from("productos").update({ bolas_vendidas_actual: actual + cant }).eq("id", balde.id);
-    }
+    await aplicarConsumoIlimitado(productos.find((p) => p.id === Number(saborId)), cant);
   }
  
+  // Cucharita, servilleta y cobertura: totales de toda la venta, también ilimitados
+  const cucharitaTotal = heladoCart.length;
+  const servilletaTotal = heladoCart.length;
+  const coberturaTotal = heladoCart.filter((h) => h.cobertura).length;
+  await aplicarConsumoIlimitado(cucharita, cucharitaTotal);
+  await aplicarConsumoIlimitado(servilleta, servilletaTotal);
+  await aplicarConsumoIlimitado(cobertura, coberturaTotal);
+ 
   for (const h of heladoCart) {
-    // Envase
+    // Envase (vasito/cucurucho) y pote: siguen con stock limitado normal
     if (h.tipo === "bola" && h.envaseId) {
       const envase = productos.find((p) => p.id === h.envaseId);
       if (envase) await sb.from("productos").update({ stock: envase.stock - 1 }).eq("id", envase.id);
@@ -2095,11 +2118,6 @@ async function confirmSale() {
     if (h.tipo === "pote14" && poteIsopor) {
       await sb.from("productos").update({ stock: poteIsopor.stock - 1 }).eq("id", poteIsopor.id);
     }
-    // Cucharita y servilleta (una por venta armada)
-    if (cucharita) await sb.from("productos").update({ stock: cucharita.stock - 1 }).eq("id", cucharita.id);
-    if (servilleta) await sb.from("productos").update({ stock: servilleta.stock - 1 }).eq("id", servilleta.id);
-    // Cobertura si se eligió
-    if (h.cobertura && cobertura) await sb.from("productos").update({ stock: cobertura.stock - 1 }).eq("id", cobertura.id);
   }
  
   // Registrar el/los movimiento(s) en caja (solo si no es fiado; lo fiado entra cuando se cobra)
@@ -2121,10 +2139,14 @@ async function openEditProduct(id) {
   const p = productos.find((pr) => pr.id === id);
   const opcionesCategoria = categorias.map((c) => `<option value="${c.id}" ${c.id===p.categoria_id?"selected":""}>${c.nombre}</option>`).join("");
   const esBaldeHelado = p.producto_base === "Balde Helado";
+  const CONSUMIBLES_ILIMITADOS = ["Cobertura", "Servilleta", "Cucharita", "Bolsita de Hielo"];
+  const esConsumibleIlimitado = esBaldeHelado || CONSUMIBLES_ILIMITADOS.includes(p.nombre);
+  const etiquetaUnidad = esBaldeHelado ? "bolas" : "usos";
+  const etiquetaPaquete = esBaldeHelado ? "balde" : "paquete";
   let rendimientosHtml = "";
-  if (esBaldeHelado) {
+  if (esConsumibleIlimitado) {
     const { data: rendimientos } = await sb.from("helado_rendimientos").select("*").eq("producto_id", id).order("created_at", { ascending: false }).limit(5);
-    rendimientosHtml = (rendimientos || []).map((r) => `<p class="text-[11px] text-[#8a7d94]">${new Date(r.created_at).toLocaleDateString("es-PY")} · rindió ${r.bolas} bolas</p>`).join("") || `<p class="text-[11px] text-[#8a7d94]">Todavía no hay baldes terminados de este sabor.</p>`;
+    rendimientosHtml = (rendimientos || []).map((r) => `<p class="text-[11px] text-[#8a7d94]">${new Date(r.created_at).toLocaleDateString("es-PY")} · rindió ${r.bolas} ${etiquetaUnidad}</p>`).join("") || `<p class="text-[11px] text-[#8a7d94]">Todavía no hay ningún ${etiquetaPaquete} terminado.</p>`;
   }
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Editar producto</p>
@@ -2147,7 +2169,7 @@ async function openEditProduct(id) {
       </label>
       <div class="grid grid-cols-2 gap-3">
         <div>
-          <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">${esBaldeHelado ? "Baldes sin abrir" : "Stock actual"}</label>
+          <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">${esConsumibleIlimitado ? `Paquetes sin abrir` : "Stock actual"}</label>
           <input id="edit-stock" type="number" value="${p.stock}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
         </div>
         <div>
@@ -2165,11 +2187,11 @@ async function openEditProduct(id) {
       </div>
     </div>
     <button onclick="saveEditProduct(${p.id})" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3 mt-5">Guardar cambios</button>
-    ${esBaldeHelado ? `
+    ${esConsumibleIlimitado ? `
     <div class="bg-[#F7F3FA] rounded-xl p-3 mt-3">
-      <p class="text-[12px] font-semibold text-[#241C2E] mb-1">Balde en uso</p>
-      <p class="text-[13px] text-[#241C2E] mb-2">Bolas vendidas de este balde: <span class="font-mono-num font-semibold">${p.bolas_vendidas_actual || 0}</span></p>
-      <button onclick="marcarBaldeTerminado(${p.id})" class="w-full bg-[#6B2D5C] text-white text-[12px] font-semibold py-2.5 rounded-lg mb-3">Marcar balde como terminado</button>
+      <p class="text-[12px] font-semibold text-[#241C2E] mb-1">${esBaldeHelado ? "Balde en uso" : "Paquete en uso"}</p>
+      <p class="text-[13px] text-[#241C2E] mb-2">${etiquetaUnidad === "bolas" ? "Bolas vendidas de este balde" : "Usos de este paquete"}: <span class="font-mono-num font-semibold">${p.bolas_vendidas_actual || 0}</span></p>
+      <button onclick="marcarConsumibleTerminado(${p.id})" class="w-full bg-[#6B2D5C] text-white text-[12px] font-semibold py-2.5 rounded-lg mb-3">Marcar ${etiquetaPaquete} como terminado</button>
       <p class="text-[11px] font-semibold text-[#8a7d94] uppercase tracking-wide mb-1">Últimos rendimientos</p>
       ${rendimientosHtml}
     </div>` : ""}
@@ -2186,14 +2208,15 @@ async function openEditProduct(id) {
   `);
 }
  
-async function marcarBaldeTerminado(id) {
+async function marcarConsumibleTerminado(id) {
   const p = productos.find((pr) => pr.id === id);
-  const bolas = Number(p.bolas_vendidas_actual || 0);
-  if (bolas === 0) { alert("Este balde todavía no tiene bolas vendidas registradas."); return; }
-  if (!confirm(`¿Marcar este balde como terminado? Rindió ${bolas} bolas.`)) return;
-  await sb.from("helado_rendimientos").insert({ producto_id: id, bolas });
+  const usados = Number(p.bolas_vendidas_actual || 0);
+  if (usados === 0) { alert("Este producto todavía no registra usos."); return; }
+  const esBalde = p.producto_base === "Balde Helado";
+  if (!confirm(`¿Marcar como terminado? Rindió ${usados} ${esBalde ? "bolas" : "usos"}.`)) return;
+  await sb.from("helado_rendimientos").insert({ producto_id: id, bolas: usados });
   await sb.from("productos").update({ bolas_vendidas_actual: 0 }).eq("id", id);
-  await registrarHistorial("productos", id, "editar", `Balde de ${p.presentacion || p.nombre} terminado — rindió ${bolas} bolas`);
+  await registrarHistorial("productos", id, "editar", `${p.presentacion || p.nombre} terminado — rindió ${usados} ${esBalde ? "bolas" : "usos"}`);
   closeModal();
   await loadAll();
 }
@@ -2204,8 +2227,11 @@ async function cargarHielo() {
   const bolsita = productos.find((p) => p.nombre === "Bolsita de Hielo");
   const hielo = productos.find((p) => p.nombre === "Hielo · Bolsa");
   if (!bolsita || !hielo) { alert("Falta cargar 'Bolsita de Hielo' o 'Hielo · Bolsa' en productos."); return; }
-  if (bolsita.stock < cantidad) { alert(`Solo quedan ${bolsita.stock} bolsitas vacías.`); return; }
-  await sb.from("productos").update({ stock: bolsita.stock - cantidad }).eq("id", bolsita.id);
+ 
+  const check = validarConsumoIlimitado(bolsita, cantidad);
+  if (!check.ok) { alert(check.mensaje); return; }
+ 
+  await aplicarConsumoIlimitado(bolsita, cantidad);
   await sb.from("productos").update({ stock: hielo.stock + cantidad }).eq("id", hielo.id);
   await registrarHistorial("productos", hielo.id, "editar", `Se cargaron ${cantidad} bolsitas de hielo con agua`);
   closeModal();
