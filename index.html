@@ -126,6 +126,7 @@ let ventasClientes = [];
 let cobros = [];
 let cart = {};
 let heladoCart = []; // ventas armadas de helado: { id, tipo: 'bola'|'pote14', bolas: [productoId,...], envaseId, cobertura, total }
+let repartosClientes = []; // todas las cuentas compartidas, para calcular deuda de cualquier cliente
 let activeTab = "dashboard";
 let chartInstance = null;
 let categoryColors = {};
@@ -164,8 +165,14 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
  
 // ---------- Carga de datos ----------
 async function loadAll() {
-  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras(), loadClientes(), loadVentasClientes(), loadCobros(), loadCaja(), loadHistorial()]);
+  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras(), loadClientes(), loadVentasClientes(), loadCobros(), loadCaja(), loadHistorial(), loadRepartosClientes()]);
   render();
+}
+ 
+async function loadRepartosClientes() {
+  const { data, error } = await sb.from("venta_repartos").select("*");
+  if (error) { console.error(error); return; }
+  repartosClientes = data;
 }
  
 async function loadCaja() {
@@ -583,6 +590,11 @@ function renderEstadoCaja() {
       </button>`;
   }
  
+  html += `
+    <button onclick="openDividirCuenta()" class="w-full flex items-center justify-center gap-2 bg-white border border-black/[0.06] rounded-xl px-4 py-2.5 mb-5">
+      <span class="text-[12px] text-[#6B2D5C] font-semibold">👥 Dividir cuenta entre varios clientes</span>
+    </button>`;
+ 
   return html;
 }
  
@@ -691,6 +703,122 @@ async function saveMovimientoCaja(tipo) {
   if (error) { alert("No se pudo registrar."); console.error(error); return; }
   await registrarHistorial("caja_movimientos", cajaActual.id, "crear", `${tipo === "retiro" ? "Retiro" : "Ingreso extra"} de ${fmt(monto)}${descripcion ? " — " + descripcion : ""}`);
   closeModal();
+  await loadAll();
+}
+ 
+// ---------- Dividir cuenta entre varios clientes ----------
+window.__divCuentaSeleccion = new Set();
+ 
+function openDividirCuenta() {
+  if (!cajaRequerida()) return;
+  window.__divCuentaSeleccion = new Set();
+  window.__divCuentaProductoId = ventasVisibles()[0]?.id;
+  window.__divCuentaCantidad = 1;
+  renderDividirCuentaModal();
+}
+ 
+function renderDividirCuentaModal() {
+  const productos_ = ventasVisibles();
+  const producto = productos_.find((p) => p.id === window.__divCuentaProductoId);
+  const total = producto ? producto.precio_venta * window.__divCuentaCantidad : 0;
+  const cantidadSeleccionados = window.__divCuentaSeleccion.size;
+  const porPersona = cantidadSeleccionados > 0 ? total / cantidadSeleccionados : 0;
+ 
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Dividir cuenta</p>
+ 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Producto</label>
+    <select id="div-producto" onchange="cambiarProductoDivCuenta(this.value)" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">
+      ${productos_.map((p) => `<option value="${p.id}" ${p.id===window.__divCuentaProductoId?"selected":""}>${p.nombre}</option>`).join("")}
+    </select>
+ 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cantidad</label>
+    <input id="div-cantidad" type="number" value="${window.__divCuentaCantidad}" onchange="cambiarCantidadDivCuenta(this.value)" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none" />
+ 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">¿Entre quiénes se reparte?</label>
+    <div class="space-y-1.5 mt-2 mb-4 max-h-[180px] overflow-y-auto">
+      ${clientes.map((c) => `
+        <label class="flex items-center gap-2 bg-[#F7F3FA] rounded-lg px-3 py-2">
+          <input type="checkbox" onchange="toggleClienteDivCuenta(${c.id}, this.checked)" ${window.__divCuentaSeleccion.has(c.id)?"checked":""} class="w-4 h-4" />
+          <span class="text-[13px] text-[#241C2E]">${c.nombre}</span>
+        </label>`).join("")}
+    </div>
+    <div class="flex gap-2 mb-4">
+      <input id="div-nuevo-cliente" type="text" placeholder="Nombre de cliente nuevo" class="flex-1 bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] outline-none" />
+      <button type="button" onclick="crearClienteDivCuenta()" class="bg-[#6B2D5C] text-white text-[13px] font-semibold px-3.5 rounded-xl">+</button>
+    </div>
+ 
+    <div class="bg-[#F7F3FA] rounded-xl p-3 mb-5">
+      <div class="flex items-center justify-between text-[13px] mb-1">
+        <span class="text-[#8a7d94]">Total</span>
+        <span class="font-mono-num font-semibold">${fmt(total)}</span>
+      </div>
+      <div class="flex items-center justify-between text-[13px]">
+        <span class="text-[#8a7d94]">Entre ${cantidadSeleccionados} persona(s)</span>
+        <span class="font-mono-num font-semibold text-[#6B2D5C]">${fmt(porPersona)} c/u</span>
+      </div>
+    </div>
+ 
+    <button onclick="confirmarDividirCuenta()" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Registrar y dividir</button>
+  `);
+}
+ 
+function cambiarProductoDivCuenta(id) {
+  window.__divCuentaProductoId = Number(id);
+  renderDividirCuentaModal();
+}
+function cambiarCantidadDivCuenta(valor) {
+  window.__divCuentaCantidad = Number(valor) || 1;
+  renderDividirCuentaModal();
+}
+function toggleClienteDivCuenta(id, checked) {
+  if (checked) window.__divCuentaSeleccion.add(id);
+  else window.__divCuentaSeleccion.delete(id);
+  renderDividirCuentaModal();
+}
+async function crearClienteDivCuenta() {
+  const nombre = document.getElementById("div-nuevo-cliente").value.trim();
+  if (!nombre) return;
+  const { data, error } = await sb.from("clientes").insert({ nombre }).select().single();
+  if (error) { alert("No se pudo crear el cliente."); console.error(error); return; }
+  await registrarHistorial("clientes", data.id, "crear", `Cliente creado: ${nombre}`);
+  clientes.push(data);
+  window.__divCuentaSeleccion.add(data.id);
+  renderDividirCuentaModal();
+}
+ 
+async function confirmarDividirCuenta() {
+  const producto = productos.find((p) => p.id === window.__divCuentaProductoId);
+  const cantidad = window.__divCuentaCantidad;
+  const seleccion = [...window.__divCuentaSeleccion];
+  if (!producto) return;
+  if (cantidad > producto.stock) { alert(`No hay suficiente stock de "${producto.nombre}". Disponible: ${producto.stock}.`); return; }
+  if (seleccion.length < 2) { alert("Elegí al menos 2 clientes para dividir la cuenta."); return; }
+ 
+  const total = producto.precio_venta * cantidad;
+  const registrado_por = usuarios[0]?.nombre || "";
+ 
+  // Un solo registro de venta (para el stock), a nombre del primer cliente elegido
+  const { data: venta, error } = await sb
+    .from("ventas")
+    .insert({ subtotal: total, descuento_total: 0, total, medio_pago: "fiado", registrado_por, cliente_id: seleccion[0], es_fiado: true })
+    .select().single();
+  if (error) { alert("No se pudo registrar."); console.error(error); return; }
+ 
+  await sb.from("venta_items").insert({ venta_id: venta.id, producto_id: producto.id, cantidad, precio_unitario: producto.precio_venta, costo_unitario: producto.costo_ultimo, descuento: 0, subtotal: total });
+  await sb.from("productos").update({ stock: producto.stock - cantidad }).eq("id", producto.id);
+ 
+  // Repartir el monto entre todos los elegidos (ajustando centavos en el primero para que sume exacto)
+  const porPersona = Math.floor(total / seleccion.length);
+  const resto = total - porPersona * seleccion.length;
+  const filas = seleccion.map((clienteId, i) => ({ venta_id: venta.id, cliente_id: clienteId, monto: porPersona + (i === 0 ? resto : 0) }));
+  await sb.from("venta_repartos").insert(filas);
+ 
+  const nombres = seleccion.map((id) => clientes.find((c) => c.id === id)?.nombre).join(", ");
+  await registrarHistorial("ventas", venta.id, "crear", `Cuenta dividida: ${producto.nombre} (${fmt(total)}) entre ${nombres}`);
+ 
+  closeModal();
+  activeTab = "dashboard";
   await loadAll();
 }
  
@@ -867,13 +995,20 @@ async function saveNewProveedor() {
 // ---------- Clientes y Fiado ----------
 function deudaCliente(clienteId) {
   const ventasFiado = ventasClientes.filter((v) => v.cliente_id === clienteId && v.es_fiado);
-  return ventasFiado.reduce((s, v) => {
+  const deudaDirecta = ventasFiado.reduce((s, v) => {
     const pagadoVenta = cobros.filter((c) => c.venta_id === v.id).reduce((ss, c) => ss + Number(c.monto), 0);
     return s + Math.max(0, Number(v.total) - pagadoVenta);
   }, 0);
+  const deudaCompartida = repartosClientes.filter((r) => r.cliente_id === clienteId).reduce((s, r) => {
+    const pagado = cobros.filter((c) => c.venta_id === r.venta_id && c.cliente_id === clienteId).reduce((ss, c) => ss + Number(c.monto), 0);
+    return s + Math.max(0, Number(r.monto) - pagado);
+  }, 0);
+  return deudaDirecta + deudaCompartida;
 }
 function totalCompradoCliente(clienteId) {
-  return ventasClientes.filter((v) => v.cliente_id === clienteId).reduce((s, v) => s + Number(v.total), 0);
+  const directo = ventasClientes.filter((v) => v.cliente_id === clienteId).reduce((s, v) => s + Number(v.total), 0);
+  const compartido = repartosClientes.filter((r) => r.cliente_id === clienteId).reduce((s, r) => s + Number(r.monto), 0);
+  return directo + compartido;
 }
  
 function renderClientes(content) {
@@ -908,12 +1043,14 @@ window.__clienteSeleccionadas = new Set();
 async function abrirClienteDetalle(clienteId) {
   window.__clienteDetalleId = clienteId;
   window.__clienteSeleccionadas = new Set();
-  const [{ data: ventasCliente }, { data: cobrosCliente }] = await Promise.all([
+  const [{ data: ventasCliente }, { data: cobrosCliente }, { data: repartosCliente }] = await Promise.all([
     sb.from("ventas").select("id, total, es_fiado, medio_pago, created_at, venta_items(cantidad, productos(nombre))").eq("cliente_id", clienteId).order("created_at", { ascending: false }),
     sb.from("cobros").select("*").eq("cliente_id", clienteId).order("created_at", { ascending: false }),
+    sb.from("venta_repartos").select("id, venta_id, monto, created_at, ventas(created_at, venta_items(cantidad, productos(nombre)))").eq("cliente_id", clienteId).order("created_at", { ascending: false }),
   ]);
   window.__clienteDetalleVentas = ventasCliente || [];
   window.__clienteDetalleCobros = cobrosCliente || [];
+  window.__clienteDetalleRepartos = repartosCliente || [];
   activeTab = "cliente-detalle";
   render();
 }
@@ -921,12 +1058,19 @@ async function abrirClienteDetalle(clienteId) {
 function pagadoDeVenta(ventaId) {
   return window.__clienteDetalleCobros.filter((c) => c.venta_id === ventaId).reduce((s, c) => s + Number(c.monto), 0);
 }
+function pagadoDeReparto(ventaId) {
+  const clienteId = window.__clienteDetalleId;
+  return window.__clienteDetalleCobros.filter((c) => c.venta_id === ventaId && c.cliente_id === clienteId).reduce((s, c) => s + Number(c.monto), 0);
+}
  
 function renderClienteDetalle(content) {
   const cliente = clientes.find((c) => c.id === window.__clienteDetalleId);
   if (!cliente) { content.innerHTML = ""; return; }
   const ventas = window.__clienteDetalleVentas;
-  const deudaTotal = ventas.filter((v) => v.es_fiado).reduce((s, v) => s + Math.max(0, Number(v.total) - pagadoDeVenta(v.id)), 0);
+  const repartos = window.__clienteDetalleRepartos;
+  const deudaDirecta = ventas.filter((v) => v.es_fiado).reduce((s, v) => s + Math.max(0, Number(v.total) - pagadoDeVenta(v.id)), 0);
+  const deudaCompartida = repartos.reduce((s, r) => s + Math.max(0, Number(r.monto) - pagadoDeReparto(r.venta_id)), 0);
+  const deudaTotal = deudaDirecta + deudaCompartida;
   const pagosSinVenta = window.__clienteDetalleCobros.filter((c) => !c.venta_id).reduce((s, c) => s + Number(c.monto), 0);
  
   content.innerHTML = `
@@ -969,6 +1113,31 @@ function renderClienteDetalle(content) {
           </div>`;
         }).join("")}
     </div>
+ 
+    ${repartos.length > 0 ? `
+    ${sectionLabel("Cuentas compartidas")}
+    <div class="space-y-2 mb-4">
+      ${repartos.map((r) => {
+        const pagado = pagadoDeReparto(r.venta_id);
+        const pendiente = Math.max(0, r.monto - pagado);
+        const fechaHora = new Date(r.created_at).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+        const itemsTexto = (r.ventas?.venta_items || []).map((it) => `${it.cantidad}× ${it.productos?.nombre || ""}`).join(", ");
+        return `
+        <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-[11px] text-[#8a7d94]">${fechaHora}</span>
+            <span class="font-mono-num text-[13px] font-semibold">${fmt(r.monto)}</span>
+          </div>
+          <p class="text-[13px] text-[#241C2E] mt-0.5">Parte de: ${itemsTexto}</p>
+          <div class="flex items-center justify-between mt-1.5">
+            ${pendiente <= 0
+              ? `<span class="text-[11px] text-[#2F9E7A] font-semibold">✓ Pagado</span>`
+              : `<span class="text-[11px] text-[#D64545] font-semibold">Pendiente ${fmt(pendiente)}</span>`}
+            ${pendiente > 0 ? `<button onclick="openCobroReparto(${r.venta_id}, ${pendiente})" class="text-[11px] text-[#6B2D5C] font-semibold">Cobrar esta</button>` : ""}
+          </div>
+        </div>`;
+      }).join("")}
+    </div>` : ""}
   `;
  
   if (window.__clienteSeleccionadas.size > 0) {
@@ -1000,6 +1169,23 @@ function openCobroVenta(ventaId) {
   const pendiente = v.total - pagadoDeVenta(ventaId);
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Cobrar esta venta</p>
+    <p class="text-[12px] text-[#8a7d94] mb-4">Pendiente ${fmt(pendiente)}</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto que paga ahora</label>
+    <input id="cobroventa-monto" type="number" value="${pendiente}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Forma de pago</label>
+    <select id="cobroventa-medio" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none">
+      <option value="efectivo">Efectivo</option>
+      <option value="transferencia">Transferencia</option>
+      <option value="qr">QR</option>
+    </select>
+    <button onclick="saveCobroVenta(${ventaId})" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Registrar cobro</button>
+  `);
+}
+ 
+function openCobroReparto(ventaId, pendiente) {
+  if (!cajaRequerida()) return;
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Cobrar su parte de la cuenta</p>
     <p class="text-[12px] text-[#8a7d94] mb-4">Pendiente ${fmt(pendiente)}</p>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto que paga ahora</label>
     <input id="cobroventa-monto" type="number" value="${pendiente}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none" />
@@ -1761,24 +1947,32 @@ async function confirmSale() {
   }
   if (heladoCart.length > 0) {
     const necesarioPorId = {};
+    const bolasPorBalde = {};
     const sumarNecesario = (id, cant) => { necesarioPorId[id] = (necesarioPorId[id] || 0) + cant; };
-    const vasito = insumoPorNombre("Vasito");
-    const cucurucho = insumoPorNombre("Cucurucho");
     const cucharita = insumoPorNombre("Cucharita");
     const servilleta = insumoPorNombre("Servilleta");
     const cobertura = insumoPorNombre("Cobertura");
     const poteIsopor = insumoPorNombre("Pote de Isopor 1/4");
     heladoCart.forEach((h) => {
-      h.bolas.forEach((saborId) => sumarNecesario(saborId, 1));
+      h.bolas.forEach((saborId) => { bolasPorBalde[saborId] = (bolasPorBalde[saborId] || 0) + 1; });
       if (h.tipo === "bola" && h.envaseId) sumarNecesario(h.envaseId, 1);
       if (h.tipo === "pote14" && poteIsopor) sumarNecesario(poteIsopor.id, 1);
       if (cucharita) sumarNecesario(cucharita.id, 1);
       if (servilleta) sumarNecesario(servilleta.id, 1);
       if (h.cobertura && cobertura) sumarNecesario(cobertura.id, 1);
     });
+    // Envase, cucharita, servilleta, cobertura y pote: siguen con stock normal (limitado)
     for (const [id, necesario] of Object.entries(necesarioPorId)) {
       const p = productos.find((pr) => pr.id === Number(id));
       if (p && necesario > p.stock) { alert(`No hay suficiente stock de "${p.nombre}". Disponible: ${p.stock}, necesitás ${necesario}.`); return; }
+    }
+    // Baldes de helado: bolas ilimitadas mientras el balde esté abierto; solo bloquea si no hay ningún balde para abrir
+    for (const saborId of Object.keys(bolasPorBalde)) {
+      const p = productos.find((pr) => pr.id === Number(saborId));
+      if (p && Number(p.bolas_vendidas_actual || 0) === 0 && Number(p.stock) <= 0) {
+        alert(`No hay baldes de "${p.presentacion || p.nombre}" disponibles. Cargá stock o marcá el balde anterior como terminado.`);
+        return;
+      }
     }
   }
  
@@ -1835,14 +2029,23 @@ async function confirmSale() {
   const cobertura = insumoPorNombre("Cobertura");
   const poteIsopor = insumoPorNombre("Pote de Isopor 1/4");
  
-  for (const h of heladoCart) {
-    // Descontar cada bola del balde de su sabor
-    const conteoPorSabor = {};
-    h.bolas.forEach((id) => (conteoPorSabor[id] = (conteoPorSabor[id] || 0) + 1));
-    for (const [saborId, cant] of Object.entries(conteoPorSabor)) {
-      const balde = productos.find((p) => p.id === Number(saborId));
-      if (balde) await sb.from("productos").update({ stock: balde.stock - cant }).eq("id", balde.id);
+  // Bolas totales por sabor en toda la venta (para abrir el balde una sola vez si hace falta)
+  const bolasPorSaborTotal = {};
+  heladoCart.forEach((h) => h.bolas.forEach((id) => { bolasPorSaborTotal[id] = (bolasPorSaborTotal[id] || 0) + 1; }));
+  for (const [saborId, cant] of Object.entries(bolasPorSaborTotal)) {
+    const balde = productos.find((p) => p.id === Number(saborId));
+    if (!balde) continue;
+    const actual = Number(balde.bolas_vendidas_actual || 0);
+    if (actual === 0) {
+      // No había un balde abierto: se abre uno nuevo (resta 1 del stock físico) y arranca el contador
+      await sb.from("productos").update({ stock: balde.stock - 1, bolas_vendidas_actual: cant }).eq("id", balde.id);
+    } else {
+      // Ya había un balde abierto: se suman las bolas, sin tocar el stock físico (ilimitado)
+      await sb.from("productos").update({ bolas_vendidas_actual: actual + cant }).eq("id", balde.id);
     }
+  }
+ 
+  for (const h of heladoCart) {
     // Envase
     if (h.tipo === "bola" && h.envaseId) {
       const envase = productos.find((p) => p.id === h.envaseId);
@@ -1873,9 +2076,15 @@ async function confirmSale() {
 }
  
 // ---------- Edición / alta de productos ----------
-function openEditProduct(id) {
+async function openEditProduct(id) {
   const p = productos.find((pr) => pr.id === id);
   const opcionesCategoria = categorias.map((c) => `<option value="${c.id}" ${c.id===p.categoria_id?"selected":""}>${c.nombre}</option>`).join("");
+  const esBaldeHelado = p.producto_base === "Balde Helado";
+  let rendimientosHtml = "";
+  if (esBaldeHelado) {
+    const { data: rendimientos } = await sb.from("helado_rendimientos").select("*").eq("producto_id", id).order("created_at", { ascending: false }).limit(5);
+    rendimientosHtml = (rendimientos || []).map((r) => `<p class="text-[11px] text-[#8a7d94]">${new Date(r.created_at).toLocaleDateString("es-PY")} · rindió ${r.bolas} bolas</p>`).join("") || `<p class="text-[11px] text-[#8a7d94]">Todavía no hay baldes terminados de este sabor.</p>`;
+  }
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Editar producto</p>
     <div class="space-y-3">
@@ -1897,7 +2106,7 @@ function openEditProduct(id) {
       </label>
       <div class="grid grid-cols-2 gap-3">
         <div>
-          <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Stock actual</label>
+          <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">${esBaldeHelado ? "Baldes sin abrir" : "Stock actual"}</label>
           <input id="edit-stock" type="number" value="${p.stock}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
         </div>
         <div>
@@ -1915,6 +2124,14 @@ function openEditProduct(id) {
       </div>
     </div>
     <button onclick="saveEditProduct(${p.id})" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3 mt-5">Guardar cambios</button>
+    ${esBaldeHelado ? `
+    <div class="bg-[#F7F3FA] rounded-xl p-3 mt-3">
+      <p class="text-[12px] font-semibold text-[#241C2E] mb-1">Balde en uso</p>
+      <p class="text-[13px] text-[#241C2E] mb-2">Bolas vendidas de este balde: <span class="font-mono-num font-semibold">${p.bolas_vendidas_actual || 0}</span></p>
+      <button onclick="marcarBaldeTerminado(${p.id})" class="w-full bg-[#6B2D5C] text-white text-[12px] font-semibold py-2.5 rounded-lg mb-3">Marcar balde como terminado</button>
+      <p class="text-[11px] font-semibold text-[#8a7d94] uppercase tracking-wide mb-1">Últimos rendimientos</p>
+      ${rendimientosHtml}
+    </div>` : ""}
     ${p.nombre === "Hielo · Bolsa" ? `
     <div class="bg-[#F7F3FA] rounded-xl p-3 mt-3">
       <p class="text-[12px] font-semibold text-[#241C2E] mb-2">Cargar bolsitas con agua</p>
@@ -1926,6 +2143,18 @@ function openEditProduct(id) {
     </div>` : ""}
     <button onclick="deleteProduct(${p.id})" class="w-full text-[#D64545] text-[13px] font-semibold py-3 mt-1">Eliminar producto</button>
   `);
+}
+ 
+async function marcarBaldeTerminado(id) {
+  const p = productos.find((pr) => pr.id === id);
+  const bolas = Number(p.bolas_vendidas_actual || 0);
+  if (bolas === 0) { alert("Este balde todavía no tiene bolas vendidas registradas."); return; }
+  if (!confirm(`¿Marcar este balde como terminado? Rindió ${bolas} bolas.`)) return;
+  await sb.from("helado_rendimientos").insert({ producto_id: id, bolas });
+  await sb.from("productos").update({ bolas_vendidas_actual: 0 }).eq("id", id);
+  await registrarHistorial("productos", id, "editar", `Balde de ${p.presentacion || p.nombre} terminado — rindió ${bolas} bolas`);
+  closeModal();
+  await loadAll();
 }
  
 async function cargarHielo() {
