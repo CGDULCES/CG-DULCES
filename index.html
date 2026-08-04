@@ -512,17 +512,31 @@ function renderDashboard(content) {
 }
  
 // ---------- Caja ----------
-function saldoCajaActual() {
-  if (!cajaActual) return 0;
-  const ventas = cajaMovimientos.filter((m) => m.tipo === "venta").reduce((s, m) => s + Number(m.monto), 0);
-  const cobrosCaja = cajaMovimientos.filter((m) => m.tipo === "cobro").reduce((s, m) => s + Number(m.monto), 0);
-  const ingresos = cajaMovimientos.filter((m) => m.tipo === "ingreso_extra").reduce((s, m) => s + Number(m.monto), 0);
-  const retiros = cajaMovimientos.filter((m) => m.tipo === "retiro").reduce((s, m) => s + Number(m.monto), 0);
-  return Number(cajaActual.monto_apertura) + ventas + cobrosCaja + ingresos - retiros;
+function esMedioBanco(medio) {
+  return medio === "transferencia" || medio === "qr";
+}
+ 
+function saldosCajaActual() {
+  if (!cajaActual) return { efectivo: 0, banco: 0 };
+  let efectivo = Number(cajaActual.apertura_efectivo || 0);
+  let banco = Number(cajaActual.apertura_banco || 0);
+  cajaMovimientos.forEach((m) => {
+    const monto = Number(m.monto);
+    const esIngreso = m.tipo === "venta" || m.tipo === "cobro" || m.tipo === "ingreso_extra";
+    const signo = esIngreso ? 1 : -1; // retiro y compra restan
+    if (esMedioBanco(m.medio_pago)) banco += signo * monto;
+    else efectivo += signo * monto;
+  });
+  return { efectivo, banco };
 }
  
 function deudaTotalClientes() {
   return clientes.reduce((s, c) => s + deudaCliente(c.id), 0);
+}
+ 
+function cajaRequerida() {
+  if (!cajaActual) { alert("Primero tenés que abrir la caja para poder hacer esto."); return false; }
+  return true;
 }
  
 function renderEstadoCaja() {
@@ -533,19 +547,26 @@ function renderEstadoCaja() {
     html += `
       <div class="bg-[#241C2E] rounded-2xl p-4 mb-5">
         <p class="text-white text-[13px] font-semibold mb-1">Caja cerrada</p>
-        <p class="text-white/60 text-[11px] mb-3">Abrila para empezar a registrar el efectivo del día.</p>
-        <button onclick="openAbrirCaja()" class="w-full bg-white text-[#241C2E] text-[13px] font-semibold rounded-xl py-2.5">Abrir caja</button>
+        <p class="text-white/60 text-[11px] mb-3">Abrila para poder vender, comprar o cobrar.</p>
+        <button onclick="abrirCaja()" class="w-full bg-white text-[#241C2E] text-[13px] font-semibold rounded-xl py-2.5">Abrir caja</button>
       </div>`;
   } else {
-    const saldo = saldoCajaActual();
+    const { efectivo, banco } = saldosCajaActual();
     html += `
       <div class="bg-[#241C2E] rounded-2xl p-4 mb-5">
         <div class="flex items-center justify-between mb-3">
-          <div>
-            <p class="text-white/60 text-[11px]">Caja abierta desde ${new Date(cajaActual.fecha_apertura).toLocaleDateString("es-PY")}</p>
-            <p class="text-white font-mono-num text-[20px] font-semibold">${fmt(saldo)}</p>
-          </div>
+          <p class="text-white/60 text-[11px]">Caja abierta desde ${new Date(cajaActual.fecha_apertura).toLocaleDateString("es-PY")}</p>
           <button onclick="openCerrarCaja()" class="text-[11px] text-white/70 underline">Cerrar caja</button>
+        </div>
+        <div class="grid grid-cols-2 gap-2 mb-3">
+          <div class="bg-white/10 rounded-xl p-3">
+            <p class="text-white/60 text-[10px]">Efectivo</p>
+            <p class="text-white font-mono-num text-[16px] font-semibold">${fmt(efectivo)}</p>
+          </div>
+          <div class="bg-white/10 rounded-xl p-3">
+            <p class="text-white/60 text-[10px]">Cuenta bancaria</p>
+            <p class="text-white font-mono-num text-[16px] font-semibold">${fmt(banco)}</p>
+          </div>
         </div>
         <div class="grid grid-cols-2 gap-2">
           <button onclick="openMovimientoCaja('retiro')" class="bg-white/10 text-white text-[12px] font-semibold rounded-xl py-2">− Retiro</button>
@@ -565,40 +586,41 @@ function renderEstadoCaja() {
   return html;
 }
  
-function openAbrirCaja() {
-  showModal(`
-    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Abrir caja</p>
-    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto con el que arrancás</label>
-    <input id="caja-apertura-monto" type="number" value="0" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
-    <button onclick="saveAbrirCaja()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Abrir</button>
-  `);
-}
-async function saveAbrirCaja() {
-  const monto_apertura = Number(document.getElementById("caja-apertura-monto").value) || 0;
+async function abrirCaja() {
   const registrado_por = usuarios[0]?.nombre || "";
-  const { data, error } = await sb.from("caja").insert({ monto_apertura, registrado_por, estado: "abierta" }).select().single();
+  // Repone automáticamente lo que quedó al cerrar la última caja
+  const { data: ultimaCerrada } = await sb.from("caja").select("*").eq("estado", "cerrada").order("fecha_cierre", { ascending: false }).limit(1);
+  const previa = ultimaCerrada && ultimaCerrada.length ? ultimaCerrada[0] : null;
+  const apertura_efectivo = previa ? Number(previa.cierre_efectivo || 0) : 0;
+  const apertura_banco = previa ? Number(previa.cierre_banco || 0) : 0;
+ 
+  const { data, error } = await sb.from("caja").insert({ apertura_efectivo, apertura_banco, registrado_por, estado: "abierta" }).select().single();
   if (error) { alert("No se pudo abrir la caja."); console.error(error); return; }
-  await registrarHistorial("caja", data.id, "crear", `Caja abierta con ${fmt(monto_apertura)}`);
-  closeModal();
+  await registrarHistorial("caja", data.id, "crear", `Caja abierta — efectivo ${fmt(apertura_efectivo)}, banco ${fmt(apertura_banco)}`);
   await loadAll();
 }
  
 function openCerrarCaja() {
-  const saldo = saldoCajaActual();
+  const { efectivo, banco } = saldosCajaActual();
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Cerrar caja</p>
-    <p class="text-[12px] text-[#8a7d94] mb-4">Según el sistema, debería haber ${fmt(saldo)}</p>
-    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto contado (opcional)</label>
-    <input id="caja-cierre-monto" type="number" placeholder="${saldo}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
+    <p class="text-[12px] text-[#8a7d94] mb-4">Según el sistema: ${fmt(efectivo)} en efectivo, ${fmt(banco)} en banco</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Efectivo contado (opcional)</label>
+    <input id="caja-cierre-efectivo" type="number" placeholder="${efectivo}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Banco contado (opcional)</label>
+    <input id="caja-cierre-banco" type="number" placeholder="${banco}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
     <button onclick="saveCerrarCaja()" class="w-full bg-[#D64545] text-white font-semibold rounded-xl py-3">Cerrar caja</button>
   `);
 }
 async function saveCerrarCaja() {
-  const valor = document.getElementById("caja-cierre-monto").value;
-  const monto_cierre = valor ? Number(valor) : saldoCajaActual();
-  const { error } = await sb.from("caja").update({ estado: "cerrada", fecha_cierre: new Date().toISOString(), monto_cierre }).eq("id", cajaActual.id);
+  const { efectivo, banco } = saldosCajaActual();
+  const valorEfectivo = document.getElementById("caja-cierre-efectivo").value;
+  const valorBanco = document.getElementById("caja-cierre-banco").value;
+  const cierre_efectivo = valorEfectivo ? Number(valorEfectivo) : efectivo;
+  const cierre_banco = valorBanco ? Number(valorBanco) : banco;
+  const { error } = await sb.from("caja").update({ estado: "cerrada", fecha_cierre: new Date().toISOString(), cierre_efectivo, cierre_banco }).eq("id", cajaActual.id);
   if (error) { alert("No se pudo cerrar la caja."); console.error(error); return; }
-  await registrarHistorial("caja", cajaActual.id, "editar", `Caja cerrada con ${fmt(monto_cierre)}`);
+  await registrarHistorial("caja", cajaActual.id, "editar", `Caja cerrada — efectivo ${fmt(cierre_efectivo)}, banco ${fmt(cierre_banco)}`);
   closeModal();
   await loadAll();
 }
@@ -609,6 +631,11 @@ function openMovimientoCaja(tipo) {
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">${titulo}</p>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto</label>
     <input id="mov-caja-monto" type="number" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">¿De dónde?</label>
+    <select id="mov-caja-medio" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">
+      <option value="efectivo">Efectivo</option>
+      <option value="transferencia">Cuenta bancaria</option>
+    </select>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Motivo</label>
     <input id="mov-caja-descripcion" type="text" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
     <button onclick="saveMovimientoCaja('${tipo}')" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Guardar</button>
@@ -617,21 +644,13 @@ function openMovimientoCaja(tipo) {
 async function saveMovimientoCaja(tipo) {
   const monto = Number(document.getElementById("mov-caja-monto").value) || 0;
   if (monto <= 0) return;
+  const medio_pago = document.getElementById("mov-caja-medio").value;
   const descripcion = document.getElementById("mov-caja-descripcion").value.trim();
-  const { error } = await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo, monto, descripcion });
+  const { error } = await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo, monto, medio_pago, descripcion });
   if (error) { alert("No se pudo registrar."); console.error(error); return; }
   await registrarHistorial("caja_movimientos", cajaActual.id, "crear", `${tipo === "retiro" ? "Retiro" : "Ingreso extra"} de ${fmt(monto)}${descripcion ? " — " + descripcion : ""}`);
   closeModal();
   await loadAll();
-}
- 
-async function asegurarCajaAbierta() {
-  if (cajaActual) return cajaActual;
-  const registrado_por = usuarios[0]?.nombre || "";
-  const { data, error } = await sb.from("caja").insert({ monto_apertura: 0, registrado_por, estado: "abierta" }).select().single();
-  if (error) { console.error(error); return null; }
-  cajaActual = data;
-  return data;
 }
  
 function renderVender(content) {
@@ -935,6 +954,7 @@ function toggleSeleccionVenta(ventaId, checked) {
 }
  
 function openCobroVenta(ventaId) {
+  if (!cajaRequerida()) return;
   const v = window.__clienteDetalleVentas.find((vv) => vv.id === ventaId);
   const pendiente = v.total - pagadoDeVenta(ventaId);
   showModal(`
@@ -961,8 +981,7 @@ async function saveCobroVenta(ventaId) {
   const cliente = clientes.find((c) => c.id === clienteId);
   const { error } = await sb.from("cobros").insert({ cliente_id: clienteId, venta_id: ventaId, monto, medio_pago, registrado_por });
   if (error) { alert("No se pudo registrar el cobro."); console.error(error); return; }
-  const caja = await asegurarCajaAbierta();
-  if (caja) await sb.from("caja_movimientos").insert({ caja_id: caja.id, tipo: "cobro", monto, descripcion: `Cobro a ${cliente?.nombre || ""}` });
+  await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "cobro", monto, medio_pago, descripcion: `Cobro a ${cliente?.nombre || ""}` });
   await registrarHistorial("cobros", ventaId, "crear", `Cobro de ${fmt(monto)} a ${cliente?.nombre || ""}`);
   closeModal();
   await loadAll();
@@ -970,6 +989,7 @@ async function saveCobroVenta(ventaId) {
 }
  
 function openCobroSeleccionadas() {
+  if (!cajaRequerida()) return;
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Cobrar ventas seleccionadas</p>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Forma de pago</label>
@@ -995,8 +1015,7 @@ async function saveCobroSeleccionadas() {
   const totalCobrado = filas.reduce((s, f) => s + f.monto, 0);
   const { error } = await sb.from("cobros").insert(filas);
   if (error) { alert("No se pudo registrar el cobro."); console.error(error); return; }
-  const caja = await asegurarCajaAbierta();
-  if (caja) await sb.from("caja_movimientos").insert({ caja_id: caja.id, tipo: "cobro", monto: totalCobrado, descripcion: `Cobro de ${filas.length} venta(s) a ${cliente?.nombre || ""}` });
+  await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "cobro", monto: totalCobrado, medio_pago, descripcion: `Cobro de ${filas.length} venta(s) a ${cliente?.nombre || ""}` });
   await registrarHistorial("cobros", clienteId, "crear", `Cobro de ${fmt(totalCobrado)} (${filas.length} ventas) a ${cliente?.nombre || ""}`);
   closeModal();
   await loadAll();
@@ -1124,6 +1143,7 @@ window.__editingCompraId = null;
 window.__originalCompraItems = [];
  
 function openNewCompra() {
+  if (!cajaRequerida()) return;
   window.__editingCompraId = null;
   window.__originalCompraItems = [];
   window.__compraTipo = "mercaderia";
@@ -1209,9 +1229,48 @@ function renderCompraModal() {
       <span class="font-mono-num text-[18px] font-semibold text-[#241C2E]">${fmt(total)}</span>
     </div>
  
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Pagaste con</label>
+    <div class="grid grid-cols-3 gap-2 mt-1 mb-3">
+      <button type="button" onclick="selectPagoCompra('efectivo', this)" class="pago-compra-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium bg-[#6B2D5C] text-white" data-pago="efectivo">Efectivo</button>
+      <button type="button" onclick="selectPagoCompra('transferencia', this)" class="pago-compra-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium" data-pago="transferencia">Transf.</button>
+      <button type="button" onclick="selectPagoCompra('mixto', this)" class="pago-compra-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium" data-pago="mixto">Mixto</button>
+    </div>
+    <div id="mixto-compra-wrap" class="hidden mb-4">
+      <div class="grid grid-cols-2 gap-2">
+        <div>
+          <label class="text-[10px] text-[#8a7d94]">Efectivo</label>
+          <input id="mixto-compra-efectivo" type="number" value="0" oninput="actualizarRestoMixtoCompra()" class="w-full bg-[#F7F3FA] rounded-lg px-2 py-2 text-[13px] outline-none" />
+        </div>
+        <div>
+          <label class="text-[10px] text-[#8a7d94]">Transferencia</label>
+          <input id="mixto-compra-transferencia" type="number" value="0" oninput="actualizarRestoMixtoCompra()" class="w-full bg-[#F7F3FA] rounded-lg px-2 py-2 text-[13px] outline-none" />
+        </div>
+      </div>
+      <p id="mixto-compra-restante" class="text-[11px] text-[#8a7d94] mt-1.5"></p>
+    </div>
+ 
     <button onclick="${editando ? "saveEditCompra()" : "saveNewCompra()"}" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">${editando ? "Guardar cambios" : "Registrar compra"}</button>
     ${editando ? `<button onclick="deleteCompra()" class="w-full text-[#D64545] text-[13px] font-semibold py-3 mt-1">Eliminar esta compra</button>` : ""}
   `);
+  window.__medioPagoCompra = "efectivo";
+}
+ 
+function selectPagoCompra(medio, btn) {
+  window.__medioPagoCompra = medio;
+  document.querySelectorAll(".pago-compra-btn").forEach((b) => b.classList.remove("bg-[#6B2D5C]", "text-white"));
+  btn.classList.add("bg-[#6B2D5C]", "text-white");
+  const wrap = document.getElementById("mixto-compra-wrap");
+  if (medio === "mixto") { wrap.classList.remove("hidden"); actualizarRestoMixtoCompra(); }
+  else wrap.classList.add("hidden");
+}
+ 
+function actualizarRestoMixtoCompra() {
+  const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+  const efectivo = Number(document.getElementById("mixto-compra-efectivo").value) || 0;
+  const transferencia = Number(document.getElementById("mixto-compra-transferencia").value) || 0;
+  const resto = total - efectivo - transferencia;
+  document.getElementById("mixto-compra-restante").textContent =
+    resto === 0 ? "✓ Cubre el total exacto" : resto > 0 ? `Falta cubrir ${fmt(resto)}` : `Te pasaste por ${fmt(-resto)}`;
 }
  
 function cambiarItemCompra(i, campo, valor) {
@@ -1237,10 +1296,25 @@ async function saveNewCompra() {
   const tipo = document.getElementById("compra-tipo").value;
   const registrado_por = usuarios[0]?.nombre || "";
   const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+  const medio_pago = window.__medioPagoCompra || "efectivo";
+ 
+  let monto_efectivo = 0, monto_transferencia = 0;
+  if (medio_pago === "mixto") {
+    monto_efectivo = Number(document.getElementById("mixto-compra-efectivo").value) || 0;
+    monto_transferencia = Number(document.getElementById("mixto-compra-transferencia").value) || 0;
+    if (monto_efectivo + monto_transferencia !== total) {
+      alert("El efectivo y la transferencia tienen que sumar exactamente el total de la compra.");
+      return;
+    }
+  } else if (medio_pago === "efectivo") {
+    monto_efectivo = total;
+  } else {
+    monto_transferencia = total;
+  }
  
   const { data: compra, error } = await sb
     .from("compras")
-    .insert({ proveedor_id, tipo, total, registrado_por })
+    .insert({ proveedor_id, tipo, total, registrado_por, medio_pago, monto_efectivo, monto_transferencia })
     .select().single();
   if (error) { alert("No se pudo registrar la compra."); console.error(error); return; }
  
@@ -1253,6 +1327,10 @@ async function saveNewCompra() {
     const p = productos.find((pr) => pr.id === it.producto_id);
     if (p) await sb.from("productos").update({ stock: p.stock + it.cantidad * factorConversion(p), costo_ultimo: it.costo_unitario }).eq("id", p.id);
   }
+ 
+  // Descontar de la caja correspondiente
+  if (monto_efectivo > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "compra", monto: monto_efectivo, medio_pago: "efectivo", descripcion: `Compra #${compra.id}` });
+  if (monto_transferencia > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "compra", monto: monto_transferencia, medio_pago: "transferencia", descripcion: `Compra #${compra.id}` });
  
   window.__compraItems = [];
   closeModal();
@@ -1480,21 +1558,36 @@ function changeQty(id, delta) {
 }
  
 function openConfirmSale() {
+  if (!cajaRequerida()) return;
   const totalNormal = calcularCarritoPromos().total;
   const totalHelados = heladoCart.reduce((s, h) => s + h.total, 0);
   const total = totalNormal + totalHelados;
+  window.__ventaTotal = total;
+  renderConfirmSaleModal();
+  window.__medioPago = "efectivo";
+}
+ 
+function renderConfirmSaleModal() {
+  const total = window.__ventaTotal;
   const opciones = usuarios.map((u) => `<option value="${u.nombre}">${u.nombre}</option>`).join("");
-  const opcionesCliente = clientes.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join("");
+  const opcionesCliente = clientes.map((c) => `<option value="${c.id}" ${window.__clienteRecienCreado===c.id?"selected":""}>${c.nombre}</option>`).join("");
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Confirmar venta</p>
     <p class="text-[13px] text-[#8a7d94] mb-1">Total</p>
     <p class="font-mono-num text-[22px] font-semibold text-[#241C2E] mb-4">${fmt(total)}</p>
  
-    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cliente (opcional)</label>
-    <select id="venta-cliente" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">
-      <option value="">Sin cliente</option>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cliente</label>
+    <select id="venta-cliente" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none">
+      <option value="">Elegí un cliente</option>
       ${opcionesCliente}
     </select>
+    <button type="button" onclick="mostrarAltaRapidaCliente()" id="btn-alta-rapida" class="text-[12px] text-[#6B2D5C] font-semibold mt-1.5 mb-3">+ Nuevo cliente rápido</button>
+    <div id="alta-rapida-cliente" class="hidden mb-3">
+      <div class="flex gap-2">
+        <input id="alta-rapida-nombre" type="text" placeholder="Nombre del cliente" class="flex-1 bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] outline-none" />
+        <button type="button" onclick="crearClienteRapido()" class="bg-[#6B2D5C] text-white text-[13px] font-semibold px-3.5 rounded-xl">Agregar</button>
+      </div>
+    </div>
  
     <label class="flex items-center gap-2 mb-4">
       <input type="checkbox" id="venta-fiado" onchange="toggleFiado(this.checked)" class="w-4 h-4" />
@@ -1503,10 +1596,24 @@ function openConfirmSale() {
  
     <div id="medio-pago-wrap">
       <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Medio de pago</label>
-      <div class="grid grid-cols-3 gap-2 mt-1 mb-4">
-        <button type="button" onclick="selectPago('efectivo', this)" class="pago-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium bg-[#6B2D5C] text-white" data-pago="efectivo">Efectivo</button>
-        <button type="button" onclick="selectPago('transferencia', this)" class="pago-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium" data-pago="transferencia">Transf.</button>
-        <button type="button" onclick="selectPago('qr', this)" class="pago-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium" data-pago="qr">QR</button>
+      <div class="grid grid-cols-4 gap-2 mt-1 mb-3">
+        <button type="button" onclick="selectPago('efectivo', this)" class="pago-btn border border-black/10 rounded-xl py-2 text-[11px] font-medium bg-[#6B2D5C] text-white" data-pago="efectivo">Efectivo</button>
+        <button type="button" onclick="selectPago('transferencia', this)" class="pago-btn border border-black/10 rounded-xl py-2 text-[11px] font-medium" data-pago="transferencia">Transf.</button>
+        <button type="button" onclick="selectPago('qr', this)" class="pago-btn border border-black/10 rounded-xl py-2 text-[11px] font-medium" data-pago="qr">QR</button>
+        <button type="button" onclick="selectPago('mixto', this)" class="pago-btn border border-black/10 rounded-xl py-2 text-[11px] font-medium" data-pago="mixto">Mixto</button>
+      </div>
+      <div id="mixto-wrap" class="hidden mb-4">
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-[10px] text-[#8a7d94]">Efectivo</label>
+            <input id="mixto-efectivo" type="number" value="0" oninput="actualizarRestoMixto()" class="w-full bg-[#F7F3FA] rounded-lg px-2 py-2 text-[13px] outline-none" />
+          </div>
+          <div>
+            <label class="text-[10px] text-[#8a7d94]">Transferencia</label>
+            <input id="mixto-transferencia" type="number" value="0" oninput="actualizarRestoMixto()" class="w-full bg-[#F7F3FA] rounded-lg px-2 py-2 text-[13px] outline-none" />
+          </div>
+        </div>
+        <p id="mixto-restante" class="text-[11px] text-[#8a7d94] mt-1.5"></p>
       </div>
     </div>
  
@@ -1515,38 +1622,65 @@ function openConfirmSale() {
  
     <button onclick="confirmSale()" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Registrar venta</button>
   `);
-  window.__medioPago = "efectivo";
+  window.__clienteRecienCreado = null;
+}
+ 
+function mostrarAltaRapidaCliente() {
+  document.getElementById("alta-rapida-cliente").classList.remove("hidden");
+  document.getElementById("btn-alta-rapida").classList.add("hidden");
+}
+ 
+async function crearClienteRapido() {
+  const nombre = document.getElementById("alta-rapida-nombre").value.trim();
+  if (!nombre) { alert("Poné un nombre."); return; }
+  const { data, error } = await sb.from("clientes").insert({ nombre }).select().single();
+  if (error) { alert("No se pudo crear el cliente."); console.error(error); return; }
+  await registrarHistorial("clientes", data.id, "crear", `Cliente creado: ${nombre}`);
+  clientes.push(data);
+  window.__clienteRecienCreado = data.id;
+  renderConfirmSaleModal();
 }
  
 function toggleFiado(checked) {
   const wrap = document.getElementById("medio-pago-wrap");
-  const clienteSelect = document.getElementById("venta-cliente");
-  if (checked) {
-    wrap.classList.add("screen-hidden");
-    if (!clienteSelect.value) alert("Elegí un cliente para dejarlo a cuenta.");
-  } else {
-    wrap.classList.remove("screen-hidden");
-  }
+  if (checked) wrap.classList.add("screen-hidden");
+  else wrap.classList.remove("screen-hidden");
 }
  
 function selectPago(medio, btn) {
   window.__medioPago = medio;
-  document.querySelectorAll(".pago-btn").forEach((b) => {
-    b.classList.remove("bg-[#6B2D5C]", "text-white");
-  });
+  document.querySelectorAll(".pago-btn").forEach((b) => b.classList.remove("bg-[#6B2D5C]", "text-white"));
   btn.classList.add("bg-[#6B2D5C]", "text-white");
+  const mixtoWrap = document.getElementById("mixto-wrap");
+  if (medio === "mixto") {
+    mixtoWrap.classList.remove("hidden");
+    actualizarRestoMixto();
+  } else {
+    mixtoWrap.classList.add("hidden");
+  }
+}
+ 
+function actualizarRestoMixto() {
+  const efectivo = Number(document.getElementById("mixto-efectivo").value) || 0;
+  const transferencia = Number(document.getElementById("mixto-transferencia").value) || 0;
+  const resto = window.__ventaTotal - efectivo - transferencia;
+  document.getElementById("mixto-restante").textContent =
+    resto === 0 ? "✓ Cubre el total exacto" : resto > 0 ? `Falta cubrir ${fmt(resto)}` : `Te pasaste por ${fmt(-resto)}`;
 }
  
 async function confirmSale() {
   const items = Object.entries(cart).filter(([, q]) => q > 0);
   if (items.length === 0 && heladoCart.length === 0) return;
+  if (!cajaRequerida()) return;
  
   const registrado_por = document.getElementById("registrado-por").value;
   const es_fiado = document.getElementById("venta-fiado").checked;
   const clienteVal = document.getElementById("venta-cliente").value;
   const cliente_id = clienteVal ? Number(clienteVal) : null;
-  if (es_fiado && !cliente_id) { alert("Elegí un cliente para dejarlo a cuenta."); return; }
+  if (!cliente_id) { alert("Elegí un cliente (o creá uno rápido) para poder registrar la venta."); return; }
   const medio_pago = es_fiado ? "fiado" : (window.__medioPago || "efectivo");
+ 
+  let monto_efectivo = 0, monto_transferencia = 0;
  
   const calculo = calcularCarritoPromos();
   let subtotalTotal = calculo.subtotalTotal, descuentoTotal = calculo.descuentoTotal;
@@ -1565,9 +1699,24 @@ async function confirmSale() {
  
   const total = subtotalTotal - descuentoTotal;
  
+  if (!es_fiado) {
+    if (medio_pago === "mixto") {
+      monto_efectivo = Number(document.getElementById("mixto-efectivo").value) || 0;
+      monto_transferencia = Number(document.getElementById("mixto-transferencia").value) || 0;
+      if (monto_efectivo + monto_transferencia !== total) {
+        alert("El efectivo y la transferencia tienen que sumar exactamente el total de la venta.");
+        return;
+      }
+    } else if (medio_pago === "efectivo") {
+      monto_efectivo = total;
+    } else {
+      monto_transferencia = total;
+    }
+  }
+ 
   const { data: venta, error: ventaError } = await sb
     .from("ventas")
-    .insert({ subtotal: subtotalTotal, descuento_total: descuentoTotal, total, medio_pago, registrado_por, cliente_id, es_fiado })
+    .insert({ subtotal: subtotalTotal, descuento_total: descuentoTotal, total, medio_pago, registrado_por, cliente_id, es_fiado, monto_efectivo, monto_transferencia })
     .select().single();
   if (ventaError) { alert("No se pudo registrar la venta."); console.error(ventaError); return; }
  
@@ -1609,10 +1758,10 @@ async function confirmSale() {
     if (h.cobertura && cobertura) await sb.from("productos").update({ stock: cobertura.stock - 1 }).eq("id", cobertura.id);
   }
  
-  // Registrar el movimiento en caja (solo si no es fiado; lo fiado entra cuando se cobra)
+  // Registrar el/los movimiento(s) en caja (solo si no es fiado; lo fiado entra cuando se cobra)
   if (!es_fiado) {
-    const caja = await asegurarCajaAbierta();
-    if (caja) await sb.from("caja_movimientos").insert({ caja_id: caja.id, tipo: "venta", monto: total, descripcion: `Venta #${venta.id}` });
+    if (monto_efectivo > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "venta", monto: monto_efectivo, medio_pago: "efectivo", descripcion: `Venta #${venta.id}` });
+    if (monto_transferencia > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "venta", monto: monto_transferencia, medio_pago: "transferencia", descripcion: `Venta #${venta.id}` });
   }
   await registrarHistorial("ventas", venta.id, "crear", `Venta de ${fmt(total)} por ${registrado_por}${es_fiado ? " (fiado)" : ""}${cliente_id ? " a " + (clientes.find((c) => c.id === cliente_id)?.nombre || "cliente") : ""}`);
  
@@ -1809,3 +1958,5 @@ checkSession();
 </body>
 </html>
  
+
+
