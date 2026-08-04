@@ -280,6 +280,9 @@ function ventasVisibles() {
 function baldesHelado() {
   return productos.filter((p) => p.producto_base === "Balde Helado");
 }
+function coberturasHelado() {
+  return productos.filter((p) => p.producto_base === "Cobertura");
+}
 function insumoPorNombre(nombre) {
   return productos.find((p) => p.nombre === nombre && p.es_insumo);
 }
@@ -1055,6 +1058,56 @@ async function abrirClienteDetalle(clienteId) {
   render();
 }
  
+const PRODUCTOS_HELADO_SIN_STOCK_DIRECTO = ["Helado · Bola", "Helado · Pote 1/4"];
+ 
+async function deleteVenta(ventaId) {
+  if (!confirm("¿Eliminar esta venta? Se deshace todo lo que generó: cobros, movimientos de caja y stock. No se puede deshacer.")) return;
+  await deleteVentaSinConfirmar(ventaId);
+}
+ 
+async function deleteVentaSinConfirmar(ventaId) {
+ 
+  // Traer los ítems reales de la venta (por si el listado en pantalla no los tiene completos)
+  const { data: items } = await sb.from("venta_items").select("producto_id, cantidad, productos(nombre)").eq("venta_id", ventaId);
+ 
+  // Revertir cobros hechos a esta venta (y sus movimientos de caja)
+  const { data: cobrosVenta } = await sb.from("cobros").select("id").eq("venta_id", ventaId);
+  const cobroIds = (cobrosVenta || []).map((c) => c.id);
+  if (cobroIds.length > 0) {
+    await sb.from("caja_movimientos").delete().in("cobro_id", cobroIds);
+    await sb.from("cobros").delete().in("id", cobroIds);
+  }
+ 
+  // Revertir el movimiento de caja de la venta original (si no fue fiada)
+  await sb.from("caja_movimientos").delete().eq("venta_id", ventaId);
+ 
+  // Revertir reparto de cuenta compartida, si la tenía
+  await sb.from("venta_repartos").delete().eq("venta_id", ventaId);
+ 
+  // Restaurar stock de productos normales (los de Helado armado no se revierten automáticamente)
+  let huboHelado = false;
+  for (const it of items || []) {
+    if (PRODUCTOS_HELADO_SIN_STOCK_DIRECTO.includes(it.productos?.nombre)) { huboHelado = true; continue; }
+    const p = productos.find((pr) => pr.id === it.producto_id);
+    if (p) await sb.from("productos").update({ stock: p.stock + it.cantidad }).eq("id", p.id);
+  }
+ 
+  await sb.from("ventas").delete().eq("id", ventaId);
+  await registrarHistorial("ventas", ventaId, "eliminar", `Venta eliminada (carga duplicada u error)`);
+ 
+  if (huboHelado) {
+    alert("Listo. Ojo: esta venta tenía Helados armados — el dinero y la deuda ya se revirtieron, pero el consumo de bolas/insumos de Helado no se deshace solo. Si hace falta, ajustalo a mano en Inventario.");
+  }
+ 
+  await loadAll();
+  if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
+}
+ 
+async function deleteRepartoCompartido(ventaId) {
+  if (!confirm("Esta cuenta está repartida entre varios clientes. Si la eliminás, se borra para TODOS los que la comparten, no solo para este cliente. ¿Continuar?")) return;
+  await deleteVentaSinConfirmar(ventaId);
+}
+ 
 function pagadoDeVenta(ventaId) {
   return window.__clienteDetalleCobros.filter((c) => c.venta_id === ventaId).reduce((s, c) => s + Number(c.monto), 0);
 }
@@ -1112,7 +1165,10 @@ function renderClienteDetalle(content) {
                     : pendiente <= 0
                       ? `<span class="text-[11px] text-[#2F9E7A] font-semibold">✓ Pagado</span>`
                       : `<span class="text-[11px] text-[#D64545] font-semibold">Pendiente ${fmt(pendiente)}</span>`}
-                  ${seleccionable ? `<button onclick="openCobroVenta(${v.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Cobrar esta</button>` : ""}
+                  <div class="flex items-center gap-3">
+                    ${seleccionable ? `<button onclick="openCobroVenta(${v.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Cobrar esta</button>` : ""}
+                    <button onclick="deleteVenta(${v.id})" class="text-[11px] text-[#D64545] font-semibold">Eliminar</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1139,7 +1195,10 @@ function renderClienteDetalle(content) {
             ${pendiente <= 0
               ? `<span class="text-[11px] text-[#2F9E7A] font-semibold">✓ Pagado</span>`
               : `<span class="text-[11px] text-[#D64545] font-semibold">Pendiente ${fmt(pendiente)}</span>`}
-            ${pendiente > 0 ? `<button onclick="openCobroReparto(${r.venta_id}, ${pendiente})" class="text-[11px] text-[#6B2D5C] font-semibold">Cobrar esta</button>` : ""}
+            <div class="flex items-center gap-3">
+              ${pendiente > 0 ? `<button onclick="openCobroReparto(${r.venta_id}, ${pendiente})" class="text-[11px] text-[#6B2D5C] font-semibold">Cobrar esta</button>` : ""}
+              <button onclick="deleteRepartoCompartido(${r.venta_id})" class="text-[11px] text-[#D64545] font-semibold">Eliminar</button>
+            </div>
           </div>
         </div>`;
       }).join("")}
@@ -1212,9 +1271,9 @@ async function saveCobroVenta(ventaId) {
   const registrado_por = usuarios[0]?.nombre || "";
   const clienteId = window.__clienteDetalleId;
   const cliente = clientes.find((c) => c.id === clienteId);
-  const { error } = await sb.from("cobros").insert({ cliente_id: clienteId, venta_id: ventaId, monto, medio_pago, registrado_por });
+  const { data: cobro, error } = await sb.from("cobros").insert({ cliente_id: clienteId, venta_id: ventaId, monto, medio_pago, registrado_por }).select().single();
   if (error) { alert("No se pudo registrar el cobro."); console.error(error); return; }
-  await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "cobro", monto, medio_pago, descripcion: `Cobro a ${cliente?.nombre || ""}` });
+  await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "cobro", monto, medio_pago, venta_id: ventaId, cobro_id: cobro.id, descripcion: `Cobro a ${cliente?.nombre || ""}` });
   await registrarHistorial("cobros", ventaId, "crear", `Cobro de ${fmt(monto)} a ${cliente?.nombre || ""}`);
   closeModal();
   await loadAll();
@@ -1246,9 +1305,12 @@ async function saveCobroSeleccionadas() {
     return { cliente_id: clienteId, venta_id: ventaId, monto: pendiente, medio_pago, registrado_por };
   });
   const totalCobrado = filas.reduce((s, f) => s + f.monto, 0);
-  const { error } = await sb.from("cobros").insert(filas);
-  if (error) { alert("No se pudo registrar el cobro."); console.error(error); return; }
-  await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "cobro", monto: totalCobrado, medio_pago, descripcion: `Cobro de ${filas.length} venta(s) a ${cliente?.nombre || ""}` });
+ 
+  for (const fila of filas) {
+    const { data: cobro, error } = await sb.from("cobros").insert(fila).select().single();
+    if (error) { alert("No se pudo registrar uno de los cobros."); console.error(error); continue; }
+    await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "cobro", monto: fila.monto, medio_pago, venta_id: fila.venta_id, cobro_id: cobro.id, descripcion: `Cobro a ${cliente?.nombre || ""}` });
+  }
   await registrarHistorial("cobros", clienteId, "crear", `Cobro de ${fmt(totalCobrado)} (${filas.length} ventas) a ${cliente?.nombre || ""}`);
   closeModal();
   await loadAll();
@@ -1754,6 +1816,7 @@ function openHeladoBuilder(tipo) {
     bolas: Array(cantidadFija).fill(baldes[0].id),
     envaseId: tipo === "bola" ? insumoPorNombre("Vasito")?.id : null,
     cobertura: false,
+    coberturaId: coberturasHelado()[0]?.id,
     servilleta: false,
   };
   renderHeladoBuilderModal();
@@ -1801,10 +1864,14 @@ function renderHeladoBuilderModal() {
       ${cucurucho ? `<button type="button" onclick="elegirEnvase(${cucurucho.id}, this)" class="envase-btn border border-black/10 rounded-xl py-2 text-[13px] font-medium ${st.envaseId===cucurucho.id?"bg-[#6B2D5C] text-white":""}">Cucurucho</button>` : ""}
     </div>` : ""}
  
-    <label class="flex items-center gap-2 mb-3">
+    <label class="flex items-center gap-2 mb-2">
       <input type="checkbox" id="cobertura-check" ${st.cobertura ? "checked" : ""} onchange="toggleCobertura(this.checked)" class="w-4 h-4" />
       <span class="text-[13px] text-[#241C2E]">Con cobertura (sin costo extra)</span>
     </label>
+    ${st.cobertura ? `
+    <select id="cobertura-sabor" onchange="cambiarSaborCobertura(this.value)" class="w-full bg-[#F7F3FA] rounded-lg px-3 py-2 text-[13px] mb-3 outline-none">
+      ${coberturasHelado().map((c) => `<option value="${c.id}" ${c.id===st.coberturaId?"selected":""}>${c.presentacion || c.nombre}</option>`).join("")}
+    </select>` : ""}
     <label class="flex items-center gap-2 mb-5">
       <input type="checkbox" id="servilleta-check" ${st.servilleta ? "checked" : ""} onchange="toggleServilleta(this.checked)" class="w-4 h-4" />
       <span class="text-[13px] text-[#241C2E]">Servilleta (sin costo extra)</span>
@@ -1836,6 +1903,10 @@ function elegirEnvase(id, btn) {
 }
 function toggleCobertura(checked) {
   window.__heladoBuilder.cobertura = checked;
+  renderHeladoBuilderModal();
+}
+function cambiarSaborCobertura(id) {
+  window.__heladoBuilder.coberturaId = Number(id);
 }
 function toggleServilleta(checked) {
   window.__heladoBuilder.servilleta = checked;
@@ -1852,7 +1923,8 @@ function agregarHeladoAlCarrito() {
     return b?.presentacion || b?.nombre || "?";
   });
   const envaseNombre = st.envaseId ? productos.find((p) => p.id === st.envaseId)?.nombre : "Pote 1/4";
-  const resumen = `${envaseNombre} · ${st.bolas.length} bola(s): ${nombresSabor.join(", ")}${st.cobertura ? " · con cobertura" : ""}${st.servilleta ? " · con servilleta" : ""}`;
+  const coberturaNombre = st.cobertura ? (productos.find((p) => p.id === st.coberturaId)?.presentacion || "cobertura") : "";
+  const resumen = `${envaseNombre} · ${st.bolas.length} bola(s): ${nombresSabor.join(", ")}${st.cobertura ? ` · con cobertura ${coberturaNombre}` : ""}${st.servilleta ? " · con servilleta" : ""}`;
  
   heladoCart.push({
     id: `h${Date.now()}`,
@@ -1861,6 +1933,7 @@ function agregarHeladoAlCarrito() {
     bolas: [...st.bolas],
     envaseId: st.envaseId,
     cobertura: st.cobertura,
+    coberturaId: st.cobertura ? st.coberturaId : null,
     servilleta: st.servilleta,
     total,
     resumen,
@@ -2017,27 +2090,27 @@ async function confirmSale() {
   if (heladoCart.length > 0) {
     const necesarioPorId = {};
     const bolasPorBalde = {};
+    const coberturaPorSabor = {};
     const sumarNecesario = (id, cant) => { necesarioPorId[id] = (necesarioPorId[id] || 0) + cant; };
     const cucharita = insumoPorNombre("Cucharita");
     const servilleta = insumoPorNombre("Servilleta");
-    const cobertura = insumoPorNombre("Cobertura");
     const poteIsopor = insumoPorNombre("Pote de Isopor 1/4");
     const vasito = insumoPorNombre("Vasito");
-    let cucharitaNecesario = 0, servilletaNecesario = 0, coberturaNecesario = 0;
+    let cucharitaNecesario = 0, servilletaNecesario = 0;
     heladoCart.forEach((h) => {
       h.bolas.forEach((saborId) => { bolasPorBalde[saborId] = (bolasPorBalde[saborId] || 0) + 1; });
       if (h.tipo === "bola" && h.envaseId) sumarNecesario(h.envaseId, 1);
       if (h.tipo === "pote14" && poteIsopor) sumarNecesario(poteIsopor.id, 1);
       if (h.tipo === "bola" && vasito && h.envaseId === vasito.id) cucharitaNecesario += 1;
       if (h.servilleta) servilletaNecesario += 1;
-      if (h.cobertura) coberturaNecesario += 1;
+      if (h.cobertura && h.coberturaId) coberturaPorSabor[h.coberturaId] = (coberturaPorSabor[h.coberturaId] || 0) + 1;
     });
     // Envase y pote: siguen con stock normal (limitado)
     for (const [id, necesario] of Object.entries(necesarioPorId)) {
       const p = productos.find((pr) => pr.id === Number(id));
       if (p && necesario > p.stock) { alert(`No hay suficiente stock de "${p.nombre}". Disponible: ${p.stock}, necesitás ${necesario}.`); return; }
     }
-    // Baldes, cucharita, servilleta y cobertura: uso ilimitado mientras haya un paquete/balde abierto
+    // Baldes, cucharita, servilleta y cobertura (por sabor): uso ilimitado mientras haya un paquete/balde abierto
     const validarIlimitado = (producto, necesario) => {
       const r = validarConsumoIlimitado(producto, necesario);
       if (!r.ok) alert(r.mensaje);
@@ -2048,7 +2121,9 @@ async function confirmSale() {
     }
     if (!validarIlimitado(cucharita, cucharitaNecesario)) return;
     if (!validarIlimitado(servilleta, servilletaNecesario)) return;
-    if (!validarIlimitado(cobertura, coberturaNecesario)) return;
+    for (const saborId of Object.keys(coberturaPorSabor)) {
+      if (!validarIlimitado(productos.find((pr) => pr.id === Number(saborId)), coberturaPorSabor[saborId])) return;
+    }
   }
  
   const calculo = calcularCarritoPromos();
@@ -2101,7 +2176,6 @@ async function confirmSale() {
   // Descontar insumos de cada helado armado
   const cucharita = insumoPorNombre("Cucharita");
   const servilleta = insumoPorNombre("Servilleta");
-  const cobertura = insumoPorNombre("Cobertura");
   const poteIsopor = insumoPorNombre("Pote de Isopor 1/4");
  
   // Bolas totales por sabor en toda la venta
@@ -2111,14 +2185,19 @@ async function confirmSale() {
     await aplicarConsumoIlimitado(productos.find((p) => p.id === Number(saborId)), cant);
   }
  
-  // Cucharita (solo helados en vasito), servilleta (según se eligió) y cobertura: ilimitados
+  // Cucharita (solo helados en vasito) y servilleta (según se eligió): ilimitados
   const vasitoDesc = insumoPorNombre("Vasito");
   const cucharitaTotal = heladoCart.filter((h) => h.tipo === "bola" && vasitoDesc && h.envaseId === vasitoDesc.id).length;
   const servilletaTotal = heladoCart.filter((h) => h.servilleta).length;
-  const coberturaTotal = heladoCart.filter((h) => h.cobertura).length;
   await aplicarConsumoIlimitado(cucharita, cucharitaTotal);
   await aplicarConsumoIlimitado(servilleta, servilletaTotal);
-  await aplicarConsumoIlimitado(cobertura, coberturaTotal);
+ 
+  // Cobertura: por sabor elegido, también ilimitada
+  const coberturaPorSaborTotal = {};
+  heladoCart.forEach((h) => { if (h.cobertura && h.coberturaId) coberturaPorSaborTotal[h.coberturaId] = (coberturaPorSaborTotal[h.coberturaId] || 0) + 1; });
+  for (const [saborId, cant] of Object.entries(coberturaPorSaborTotal)) {
+    await aplicarConsumoIlimitado(productos.find((p) => p.id === Number(saborId)), cant);
+  }
  
   for (const h of heladoCart) {
     // Envase (vasito/cucurucho) y pote: siguen con stock limitado normal
@@ -2133,8 +2212,8 @@ async function confirmSale() {
  
   // Registrar el/los movimiento(s) en caja (solo si no es fiado; lo fiado entra cuando se cobra)
   if (!es_fiado) {
-    if (monto_efectivo > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "venta", monto: monto_efectivo, medio_pago: "efectivo", descripcion: `Venta #${venta.id}` });
-    if (monto_transferencia > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "venta", monto: monto_transferencia, medio_pago: "transferencia", descripcion: `Venta #${venta.id}` });
+    if (monto_efectivo > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "venta", monto: monto_efectivo, medio_pago: "efectivo", venta_id: venta.id, descripcion: `Venta #${venta.id}` });
+    if (monto_transferencia > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "venta", monto: monto_transferencia, medio_pago: "transferencia", venta_id: venta.id, descripcion: `Venta #${venta.id}` });
   }
   await registrarHistorial("ventas", venta.id, "crear", `Venta de ${fmt(total)} por ${registrado_por}${es_fiado ? " (fiado)" : ""}${cliente_id ? " a " + (clientes.find((c) => c.id === cliente_id)?.nombre || "cliente") : ""}`);
  
@@ -2150,8 +2229,9 @@ async function openEditProduct(id) {
   const p = productos.find((pr) => pr.id === id);
   const opcionesCategoria = categorias.map((c) => `<option value="${c.id}" ${c.id===p.categoria_id?"selected":""}>${c.nombre}</option>`).join("");
   const esBaldeHelado = p.producto_base === "Balde Helado";
-  const CONSUMIBLES_ILIMITADOS = ["Cobertura", "Servilleta", "Cucharita", "Bolsita de Hielo"];
-  const esConsumibleIlimitado = esBaldeHelado || CONSUMIBLES_ILIMITADOS.includes(p.nombre);
+  const esCoberturaHelado = p.producto_base === "Cobertura";
+  const CONSUMIBLES_ILIMITADOS = ["Servilleta", "Cucharita", "Bolsita de Hielo"];
+  const esConsumibleIlimitado = esBaldeHelado || esCoberturaHelado || CONSUMIBLES_ILIMITADOS.includes(p.nombre);
   const etiquetaUnidad = esBaldeHelado ? "bolas" : "usos";
   const etiquetaPaquete = esBaldeHelado ? "balde" : "paquete";
   let rendimientosHtml = "";
