@@ -1754,6 +1754,7 @@ function openHeladoBuilder(tipo) {
     bolas: Array(cantidadFija).fill(baldes[0].id),
     envaseId: tipo === "bola" ? insumoPorNombre("Vasito")?.id : null,
     cobertura: false,
+    servilleta: false,
   };
   renderHeladoBuilderModal();
 }
@@ -1800,9 +1801,13 @@ function renderHeladoBuilderModal() {
       ${cucurucho ? `<button type="button" onclick="elegirEnvase(${cucurucho.id}, this)" class="envase-btn border border-black/10 rounded-xl py-2 text-[13px] font-medium ${st.envaseId===cucurucho.id?"bg-[#6B2D5C] text-white":""}">Cucurucho</button>` : ""}
     </div>` : ""}
  
-    <label class="flex items-center gap-2 mb-5">
+    <label class="flex items-center gap-2 mb-3">
       <input type="checkbox" id="cobertura-check" ${st.cobertura ? "checked" : ""} onchange="toggleCobertura(this.checked)" class="w-4 h-4" />
       <span class="text-[13px] text-[#241C2E]">Con cobertura (sin costo extra)</span>
+    </label>
+    <label class="flex items-center gap-2 mb-5">
+      <input type="checkbox" id="servilleta-check" ${st.servilleta ? "checked" : ""} onchange="toggleServilleta(this.checked)" class="w-4 h-4" />
+      <span class="text-[13px] text-[#241C2E]">Servilleta (sin costo extra)</span>
     </label>
  
     <div class="flex items-center justify-between mb-4">
@@ -1832,6 +1837,9 @@ function elegirEnvase(id, btn) {
 function toggleCobertura(checked) {
   window.__heladoBuilder.cobertura = checked;
 }
+function toggleServilleta(checked) {
+  window.__heladoBuilder.servilleta = checked;
+}
  
 function agregarHeladoAlCarrito() {
   const st = window.__heladoBuilder;
@@ -1844,7 +1852,7 @@ function agregarHeladoAlCarrito() {
     return b?.presentacion || b?.nombre || "?";
   });
   const envaseNombre = st.envaseId ? productos.find((p) => p.id === st.envaseId)?.nombre : "Pote 1/4";
-  const resumen = `${envaseNombre} · ${st.bolas.length} bola(s): ${nombresSabor.join(", ")}${st.cobertura ? " · con cobertura" : ""}`;
+  const resumen = `${envaseNombre} · ${st.bolas.length} bola(s): ${nombresSabor.join(", ")}${st.cobertura ? " · con cobertura" : ""}${st.servilleta ? " · con servilleta" : ""}`;
  
   heladoCart.push({
     id: `h${Date.now()}`,
@@ -1853,6 +1861,7 @@ function agregarHeladoAlCarrito() {
     bolas: [...st.bolas],
     envaseId: st.envaseId,
     cobertura: st.cobertura,
+    servilleta: st.servilleta,
     total,
     resumen,
   });
@@ -2013,13 +2022,14 @@ async function confirmSale() {
     const servilleta = insumoPorNombre("Servilleta");
     const cobertura = insumoPorNombre("Cobertura");
     const poteIsopor = insumoPorNombre("Pote de Isopor 1/4");
+    const vasito = insumoPorNombre("Vasito");
     let cucharitaNecesario = 0, servilletaNecesario = 0, coberturaNecesario = 0;
     heladoCart.forEach((h) => {
       h.bolas.forEach((saborId) => { bolasPorBalde[saborId] = (bolasPorBalde[saborId] || 0) + 1; });
       if (h.tipo === "bola" && h.envaseId) sumarNecesario(h.envaseId, 1);
       if (h.tipo === "pote14" && poteIsopor) sumarNecesario(poteIsopor.id, 1);
-      cucharitaNecesario += 1;
-      servilletaNecesario += 1;
+      if (h.tipo === "bola" && vasito && h.envaseId === vasito.id) cucharitaNecesario += 1;
+      if (h.servilleta) servilletaNecesario += 1;
       if (h.cobertura) coberturaNecesario += 1;
     });
     // Envase y pote: siguen con stock normal (limitado)
@@ -2101,9 +2111,10 @@ async function confirmSale() {
     await aplicarConsumoIlimitado(productos.find((p) => p.id === Number(saborId)), cant);
   }
  
-  // Cucharita, servilleta y cobertura: totales de toda la venta, también ilimitados
-  const cucharitaTotal = heladoCart.length;
-  const servilletaTotal = heladoCart.length;
+  // Cucharita (solo helados en vasito), servilleta (según se eligió) y cobertura: ilimitados
+  const vasitoDesc = insumoPorNombre("Vasito");
+  const cucharitaTotal = heladoCart.filter((h) => h.tipo === "bola" && vasitoDesc && h.envaseId === vasitoDesc.id).length;
+  const servilletaTotal = heladoCart.filter((h) => h.servilleta).length;
   const coberturaTotal = heladoCart.filter((h) => h.cobertura).length;
   await aplicarConsumoIlimitado(cucharita, cucharitaTotal);
   await aplicarConsumoIlimitado(servilleta, servilletaTotal);
