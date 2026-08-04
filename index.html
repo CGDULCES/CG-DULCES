@@ -51,7 +51,8 @@
         <p class="font-display text-[22px] font-semibold leading-tight">CG Dulces</p>
         <p class="text-[12px] text-white/70">Panel del negocio</p>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-3">
+        <button onclick="irA('auditoria')" class="text-[11px] text-white/70 underline">Auditoría</button>
         <button id="logout-btn" class="text-[11px] text-white/70 underline">Salir</button>
       </div>
     </div>
@@ -118,6 +119,9 @@ let ventasHistoricas = [];
 let proveedores = [];
 let compras = [];
 let clientes = [];
+let cajaActual = null;
+let cajaMovimientos = [];
+let historial = [];
 let ventasClientes = [];
 let cobros = [];
 let cart = {};
@@ -160,8 +164,32 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
  
 // ---------- Carga de datos ----------
 async function loadAll() {
-  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras(), loadClientes(), loadVentasClientes(), loadCobros()]);
+  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras(), loadClientes(), loadVentasClientes(), loadCobros(), loadCaja(), loadHistorial()]);
   render();
+}
+ 
+async function loadCaja() {
+  const { data, error } = await sb.from("caja").select("*").eq("estado", "abierta").order("fecha_apertura", { ascending: false }).limit(1);
+  if (error) { console.error(error); return; }
+  cajaActual = data && data.length ? data[0] : null;
+  if (cajaActual) {
+    const { data: movs, error: movError } = await sb.from("caja_movimientos").select("*").eq("caja_id", cajaActual.id).order("fecha", { ascending: false });
+    if (!movError) cajaMovimientos = movs;
+  } else {
+    cajaMovimientos = [];
+  }
+}
+ 
+async function loadHistorial() {
+  const { data, error } = await sb.from("historial").select("*").order("fecha", { ascending: false }).limit(150);
+  if (error) { console.error(error); return; }
+  historial = data;
+}
+ 
+// Registra cualquier acción importante para el módulo de Auditoría
+async function registrarHistorial(tabla, registro_id, accion, detalle) {
+  const usuario = usuarios[0]?.nombre || "";
+  await sb.from("historial").insert({ tabla, registro_id, accion, detalle, usuario });
 }
  
 async function loadClientes() {
@@ -386,7 +414,7 @@ function sectionLabel(text) {
 // ---------- Render principal ----------
 function render() {
   const content = document.getElementById("content");
-  const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes" };
+  const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes", "auditoria": "" };
   const grupoActivo = mapaGrupo[activeTab] || activeTab;
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === grupoActivo));
   document.getElementById("add-product-fab").classList.toggle("screen-hidden", activeTab !== "inventario");
@@ -399,6 +427,7 @@ function render() {
   if (activeTab === "clientes") renderClientes(content);
   if (activeTab === "cliente-detalle") renderClienteDetalle(content);
   if (activeTab === "compras") renderCompras(content);
+  if (activeTab === "auditoria") renderAuditoria(content);
   renderCartBar();
 }
  
@@ -482,9 +511,133 @@ function renderDashboard(content) {
   });
 }
  
+// ---------- Caja ----------
+function saldoCajaActual() {
+  if (!cajaActual) return 0;
+  const ventas = cajaMovimientos.filter((m) => m.tipo === "venta").reduce((s, m) => s + Number(m.monto), 0);
+  const cobrosCaja = cajaMovimientos.filter((m) => m.tipo === "cobro").reduce((s, m) => s + Number(m.monto), 0);
+  const ingresos = cajaMovimientos.filter((m) => m.tipo === "ingreso_extra").reduce((s, m) => s + Number(m.monto), 0);
+  const retiros = cajaMovimientos.filter((m) => m.tipo === "retiro").reduce((s, m) => s + Number(m.monto), 0);
+  return Number(cajaActual.monto_apertura) + ventas + cobrosCaja + ingresos - retiros;
+}
+ 
+function deudaTotalClientes() {
+  return clientes.reduce((s, c) => s + deudaCliente(c.id), 0);
+}
+ 
+function renderEstadoCaja() {
+  const deudaGeneral = deudaTotalClientes();
+  let html = "";
+ 
+  if (!cajaActual) {
+    html += `
+      <div class="bg-[#241C2E] rounded-2xl p-4 mb-5">
+        <p class="text-white text-[13px] font-semibold mb-1">Caja cerrada</p>
+        <p class="text-white/60 text-[11px] mb-3">Abrila para empezar a registrar el efectivo del día.</p>
+        <button onclick="openAbrirCaja()" class="w-full bg-white text-[#241C2E] text-[13px] font-semibold rounded-xl py-2.5">Abrir caja</button>
+      </div>`;
+  } else {
+    const saldo = saldoCajaActual();
+    html += `
+      <div class="bg-[#241C2E] rounded-2xl p-4 mb-5">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <p class="text-white/60 text-[11px]">Caja abierta desde ${new Date(cajaActual.fecha_apertura).toLocaleDateString("es-PY")}</p>
+            <p class="text-white font-mono-num text-[20px] font-semibold">${fmt(saldo)}</p>
+          </div>
+          <button onclick="openCerrarCaja()" class="text-[11px] text-white/70 underline">Cerrar caja</button>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <button onclick="openMovimientoCaja('retiro')" class="bg-white/10 text-white text-[12px] font-semibold rounded-xl py-2">− Retiro</button>
+          <button onclick="openMovimientoCaja('ingreso_extra')" class="bg-white/10 text-white text-[12px] font-semibold rounded-xl py-2">+ Ingreso extra</button>
+        </div>
+      </div>`;
+  }
+ 
+  if (deudaGeneral > 0) {
+    html += `
+      <button onclick="irA('clientes')" class="w-full flex items-center justify-between bg-[#D64545]/10 border border-[#D64545]/25 rounded-xl px-4 py-2.5 mb-5">
+        <span class="text-[12px] text-[#D64545] font-semibold">Hay ${fmt(deudaGeneral)} en fiado pendiente de cobro</span>
+        <span class="text-[12px] text-[#D64545] font-semibold">Cobrar ›</span>
+      </button>`;
+  }
+ 
+  return html;
+}
+ 
+function openAbrirCaja() {
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Abrir caja</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto con el que arrancás</label>
+    <input id="caja-apertura-monto" type="number" value="0" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
+    <button onclick="saveAbrirCaja()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Abrir</button>
+  `);
+}
+async function saveAbrirCaja() {
+  const monto_apertura = Number(document.getElementById("caja-apertura-monto").value) || 0;
+  const registrado_por = usuarios[0]?.nombre || "";
+  const { data, error } = await sb.from("caja").insert({ monto_apertura, registrado_por, estado: "abierta" }).select().single();
+  if (error) { alert("No se pudo abrir la caja."); console.error(error); return; }
+  await registrarHistorial("caja", data.id, "crear", `Caja abierta con ${fmt(monto_apertura)}`);
+  closeModal();
+  await loadAll();
+}
+ 
+function openCerrarCaja() {
+  const saldo = saldoCajaActual();
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Cerrar caja</p>
+    <p class="text-[12px] text-[#8a7d94] mb-4">Según el sistema, debería haber ${fmt(saldo)}</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto contado (opcional)</label>
+    <input id="caja-cierre-monto" type="number" placeholder="${saldo}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
+    <button onclick="saveCerrarCaja()" class="w-full bg-[#D64545] text-white font-semibold rounded-xl py-3">Cerrar caja</button>
+  `);
+}
+async function saveCerrarCaja() {
+  const valor = document.getElementById("caja-cierre-monto").value;
+  const monto_cierre = valor ? Number(valor) : saldoCajaActual();
+  const { error } = await sb.from("caja").update({ estado: "cerrada", fecha_cierre: new Date().toISOString(), monto_cierre }).eq("id", cajaActual.id);
+  if (error) { alert("No se pudo cerrar la caja."); console.error(error); return; }
+  await registrarHistorial("caja", cajaActual.id, "editar", `Caja cerrada con ${fmt(monto_cierre)}`);
+  closeModal();
+  await loadAll();
+}
+ 
+function openMovimientoCaja(tipo) {
+  const titulo = tipo === "retiro" ? "Registrar retiro" : "Registrar ingreso extra";
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">${titulo}</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto</label>
+    <input id="mov-caja-monto" type="number" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Motivo</label>
+    <input id="mov-caja-descripcion" type="text" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
+    <button onclick="saveMovimientoCaja('${tipo}')" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Guardar</button>
+  `);
+}
+async function saveMovimientoCaja(tipo) {
+  const monto = Number(document.getElementById("mov-caja-monto").value) || 0;
+  if (monto <= 0) return;
+  const descripcion = document.getElementById("mov-caja-descripcion").value.trim();
+  const { error } = await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo, monto, descripcion });
+  if (error) { alert("No se pudo registrar."); console.error(error); return; }
+  await registrarHistorial("caja_movimientos", cajaActual.id, "crear", `${tipo === "retiro" ? "Retiro" : "Ingreso extra"} de ${fmt(monto)}${descripcion ? " — " + descripcion : ""}`);
+  closeModal();
+  await loadAll();
+}
+ 
+async function asegurarCajaAbierta() {
+  if (cajaActual) return cajaActual;
+  const registrado_por = usuarios[0]?.nombre || "";
+  const { data, error } = await sb.from("caja").insert({ monto_apertura: 0, registrado_por, estado: "abierta" }).select().single();
+  if (error) { console.error(error); return null; }
+  cajaActual = data;
+  return data;
+}
+ 
 function renderVender(content) {
+  let html = renderEstadoCaja();
   const grupos = agruparPorCategoria(ventasVisibles());
-  let html = Object.entries(grupos).map(([cat, lista]) => `
+  html += Object.entries(grupos).map(([cat, lista]) => `
     <div class="mb-5">
       ${sectionLabel(cat)}
       <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -642,8 +795,9 @@ async function saveNewProveedor() {
   const nombre = document.getElementById("prov-nombre").value.trim();
   if (!nombre) { alert("Poné un nombre."); return; }
   const telefono = document.getElementById("prov-telefono").value.trim() || null;
-  const { error } = await sb.from("proveedores").insert({ nombre, telefono });
+  const { data, error } = await sb.from("proveedores").insert({ nombre, telefono }).select().single();
   if (error) { alert("No se pudo guardar."); console.error(error); return; }
+  await registrarHistorial("proveedores", data.id, "crear", `Proveedor creado: ${nombre}`);
   closeModal();
   await loadAll();
   activeTab = "proveedores";
@@ -804,8 +958,12 @@ async function saveCobroVenta(ventaId) {
   const medio_pago = document.getElementById("cobroventa-medio").value;
   const registrado_por = usuarios[0]?.nombre || "";
   const clienteId = window.__clienteDetalleId;
+  const cliente = clientes.find((c) => c.id === clienteId);
   const { error } = await sb.from("cobros").insert({ cliente_id: clienteId, venta_id: ventaId, monto, medio_pago, registrado_por });
   if (error) { alert("No se pudo registrar el cobro."); console.error(error); return; }
+  const caja = await asegurarCajaAbierta();
+  if (caja) await sb.from("caja_movimientos").insert({ caja_id: caja.id, tipo: "cobro", monto, descripcion: `Cobro a ${cliente?.nombre || ""}` });
+  await registrarHistorial("cobros", ventaId, "crear", `Cobro de ${fmt(monto)} a ${cliente?.nombre || ""}`);
   closeModal();
   await loadAll();
   await abrirClienteDetalle(clienteId);
@@ -828,13 +986,18 @@ async function saveCobroSeleccionadas() {
   const medio_pago = document.getElementById("cobrosel-medio").value;
   const registrado_por = usuarios[0]?.nombre || "";
   const clienteId = window.__clienteDetalleId;
+  const cliente = clientes.find((c) => c.id === clienteId);
   const filas = [...window.__clienteSeleccionadas].map((ventaId) => {
     const v = window.__clienteDetalleVentas.find((vv) => vv.id === ventaId);
     const pendiente = v.total - pagadoDeVenta(ventaId);
     return { cliente_id: clienteId, venta_id: ventaId, monto: pendiente, medio_pago, registrado_por };
   });
+  const totalCobrado = filas.reduce((s, f) => s + f.monto, 0);
   const { error } = await sb.from("cobros").insert(filas);
   if (error) { alert("No se pudo registrar el cobro."); console.error(error); return; }
+  const caja = await asegurarCajaAbierta();
+  if (caja) await sb.from("caja_movimientos").insert({ caja_id: caja.id, tipo: "cobro", monto: totalCobrado, descripcion: `Cobro de ${filas.length} venta(s) a ${cliente?.nombre || ""}` });
+  await registrarHistorial("cobros", clienteId, "crear", `Cobro de ${fmt(totalCobrado)} (${filas.length} ventas) a ${cliente?.nombre || ""}`);
   closeModal();
   await loadAll();
   await abrirClienteDetalle(clienteId);
@@ -851,8 +1014,9 @@ function openNewCliente() {
 async function saveNewCliente() {
   const nombre = document.getElementById("cliente-nombre").value.trim();
   if (!nombre) { alert("Poné un nombre."); return; }
-  const { error } = await sb.from("clientes").insert({ nombre });
+  const { data, error } = await sb.from("clientes").insert({ nombre }).select().single();
   if (error) { alert("No se pudo guardar."); console.error(error); return; }
+  await registrarHistorial("clientes", data.id, "crear", `Cliente creado: ${nombre}`);
   closeModal();
   await loadAll();
   activeTab = "clientes";
@@ -903,6 +1067,32 @@ async function saveCobro(clienteId) {
   await loadAll();
   activeTab = "clientes";
   render();
+}
+ 
+// ---------- Auditoría ----------
+const ICONO_ACCION = { crear: "🟢", editar: "🟡", eliminar: "🔴" };
+const NOMBRE_TABLA = {
+  productos: "Producto", ventas: "Venta", compras: "Compra", proveedores: "Proveedor",
+  clientes: "Cliente", cobros: "Cobro", caja: "Caja", caja_movimientos: "Movimiento de caja",
+};
+ 
+function renderAuditoria(content) {
+  content.innerHTML = `
+    <button onclick="irA('dashboard')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver al Dashboard</button>
+    ${sectionLabel("Auditoría · Todos los movimientos del sistema")}
+    <div class="space-y-2">
+      ${historial.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Todavía no hay movimientos registrados.</p>` :
+        historial.map((h) => `
+        <div class="bg-white rounded-2xl p-3.5 shadow-sm border border-black/[0.04]">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[12px] font-semibold text-[#241C2E]">${ICONO_ACCION[h.accion] || "•"} ${NOMBRE_TABLA[h.tabla] || h.tabla}</span>
+            <span class="text-[10px] text-[#8a7d94]">${new Date(h.fecha).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+          </div>
+          <p class="text-[13px] text-[#241C2E]">${h.detalle || ""}</p>
+          <p class="text-[11px] text-[#8a7d94] mt-0.5">${h.usuario || ""}</p>
+        </div>`).join("")}
+    </div>
+  `;
 }
  
 // ---------- Compras ----------
@@ -1066,6 +1256,8 @@ async function saveNewCompra() {
  
   window.__compraItems = [];
   closeModal();
+  const proveedorNombre = proveedores.find((p) => p.id === proveedor_id)?.nombre || "sin proveedor";
+  await registrarHistorial("compras", compra.id, "crear", `Compra registrada a ${proveedorNombre} por ${fmt(total)}`);
   await loadAll();
   activeTab = "compras";
   render();
@@ -1104,6 +1296,7 @@ async function saveEditCompra() {
   }
  
   await sb.from("compras").update({ proveedor_id, tipo, total }).eq("id", compraId);
+  await registrarHistorial("compras", compraId, "editar", `Compra editada, nuevo total ${fmt(total)}`);
  
   window.__editingCompraId = null;
   window.__compraItems = [];
@@ -1120,6 +1313,7 @@ async function deleteCompra() {
     if (p) await sb.from("productos").update({ stock: p.stock - it.cantidad * factorConversion(p) }).eq("id", p.id);
   }
   await sb.from("compras").delete().eq("id", window.__editingCompraId);
+  await registrarHistorial("compras", window.__editingCompraId, "eliminar", `Compra eliminada`);
  
   window.__editingCompraId = null;
   window.__compraItems = [];
@@ -1415,6 +1609,13 @@ async function confirmSale() {
     if (h.cobertura && cobertura) await sb.from("productos").update({ stock: cobertura.stock - 1 }).eq("id", cobertura.id);
   }
  
+  // Registrar el movimiento en caja (solo si no es fiado; lo fiado entra cuando se cobra)
+  if (!es_fiado) {
+    const caja = await asegurarCajaAbierta();
+    if (caja) await sb.from("caja_movimientos").insert({ caja_id: caja.id, tipo: "venta", monto: total, descripcion: `Venta #${venta.id}` });
+  }
+  await registrarHistorial("ventas", venta.id, "crear", `Venta de ${fmt(total)} por ${registrado_por}${es_fiado ? " (fiado)" : ""}${cliente_id ? " a " + (clientes.find((c) => c.id === cliente_id)?.nombre || "cliente") : ""}`);
+ 
   cart = {};
   heladoCart = [];
   closeModal();
@@ -1487,6 +1688,7 @@ async function cargarHielo() {
   if (bolsita.stock < cantidad) { alert(`Solo quedan ${bolsita.stock} bolsitas vacías.`); return; }
   await sb.from("productos").update({ stock: bolsita.stock - cantidad }).eq("id", bolsita.id);
   await sb.from("productos").update({ stock: hielo.stock + cantidad }).eq("id", hielo.id);
+  await registrarHistorial("productos", hielo.id, "editar", `Se cargaron ${cantidad} bolsitas de hielo con agua`);
   closeModal();
   await loadAll();
 }
@@ -1500,8 +1702,11 @@ async function saveEditProduct(id) {
   const stock_minimo = Number(document.getElementById("edit-minimo").value);
   const precio_venta = Number(document.getElementById("edit-precio").value);
   const costo_ultimo = Number(document.getElementById("edit-costo").value);
+  const anterior = productos.find((p) => p.id === id);
   const { error } = await sb.from("productos").update({ nombre, categoria_id, presentacion, es_insumo, stock, stock_minimo, precio_venta, costo_ultimo }).eq("id", id);
   if (error) { alert("No se pudo guardar."); console.error(error); return; }
+  const cambioStock = anterior && anterior.stock !== stock ? ` (stock ${anterior.stock} → ${stock})` : "";
+  await registrarHistorial("productos", id, "editar", `Editado: ${nombre}${cambioStock}`);
   closeModal();
   await loadAll();
 }
@@ -1515,6 +1720,7 @@ async function deleteProduct(id) {
   if (!confirm("¿Eliminar este producto? Ya no va a aparecer en la app, pero se conserva en el historial de ventas pasadas.")) return;
   const { error } = await sb.from("productos").update({ activo: false }).eq("id", id);
   if (error) { alert("No se pudo eliminar."); console.error(error); return; }
+  await registrarHistorial("productos", id, "eliminar", `Producto eliminado: ${p?.nombre || ""}`);
   closeModal();
   await loadAll();
 }
@@ -1571,8 +1777,9 @@ async function saveNewProduct() {
   const stock = Number(document.getElementById("new-stock").value) || 0;
   const stock_minimo = Number(document.getElementById("new-minimo").value) || 0;
  
-  const { error } = await sb.from("productos").insert({ nombre, categoria_id, presentacion, precio_venta, costo_ultimo, stock, stock_minimo });
+  const { data, error } = await sb.from("productos").insert({ nombre, categoria_id, presentacion, precio_venta, costo_ultimo, stock, stock_minimo }).select().single();
   if (error) { alert("No se pudo crear el producto."); console.error(error); return; }
+  await registrarHistorial("productos", data.id, "crear", `Producto creado: ${nombre}`);
   closeModal();
   await loadAll();
 }
@@ -1602,5 +1809,3 @@ checkSession();
 </body>
 </html>
  
-
-
