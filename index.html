@@ -199,7 +199,7 @@ async function loadClientes() {
 }
  
 async function loadVentasClientes() {
-  const { data, error } = await sb.from("ventas").select("cliente_id, total, es_fiado, created_at").not("cliente_id", "is", null);
+  const { data, error } = await sb.from("ventas").select("id, cliente_id, total, es_fiado, created_at").not("cliente_id", "is", null);
   if (error) { console.error(error); return; }
   ventasClientes = data;
 }
@@ -646,6 +646,16 @@ async function saveMovimientoCaja(tipo) {
   if (monto <= 0) return;
   const medio_pago = document.getElementById("mov-caja-medio").value;
   const descripcion = document.getElementById("mov-caja-descripcion").value.trim();
+ 
+  if (tipo === "retiro") {
+    const saldos = saldosCajaActual();
+    const disponible = esMedioBanco(medio_pago) ? saldos.banco : saldos.efectivo;
+    if (monto > disponible) {
+      alert(`No hay suficiente en ${esMedioBanco(medio_pago) ? "la cuenta bancaria" : "efectivo"}. Disponible: ${fmt(disponible)}.`);
+      return;
+    }
+  }
+ 
   const { error } = await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo, monto, medio_pago, descripcion });
   if (error) { alert("No se pudo registrar."); console.error(error); return; }
   await registrarHistorial("caja_movimientos", cajaActual.id, "crear", `${tipo === "retiro" ? "Retiro" : "Ingreso extra"} de ${fmt(monto)}${descripcion ? " — " + descripcion : ""}`);
@@ -825,9 +835,11 @@ async function saveNewProveedor() {
  
 // ---------- Clientes y Fiado ----------
 function deudaCliente(clienteId) {
-  const vendido = ventasClientes.filter((v) => v.cliente_id === clienteId && v.es_fiado).reduce((s, v) => s + Number(v.total), 0);
-  const pagado = cobros.filter((c) => c.cliente_id === clienteId).reduce((s, c) => s + Number(c.monto), 0);
-  return vendido - pagado;
+  const ventasFiado = ventasClientes.filter((v) => v.cliente_id === clienteId && v.es_fiado);
+  return ventasFiado.reduce((s, v) => {
+    const pagadoVenta = cobros.filter((c) => c.venta_id === v.id).reduce((ss, c) => ss + Number(c.monto), 0);
+    return s + Math.max(0, Number(v.total) - pagadoVenta);
+  }, 0);
 }
 function totalCompradoCliente(clienteId) {
   return ventasClientes.filter((v) => v.cliente_id === clienteId).reduce((s, v) => s + Number(v.total), 0);
@@ -883,9 +895,7 @@ function renderClienteDetalle(content) {
   const cliente = clientes.find((c) => c.id === window.__clienteDetalleId);
   if (!cliente) { content.innerHTML = ""; return; }
   const ventas = window.__clienteDetalleVentas;
-  const totalVentasFiado = ventas.filter((v) => v.es_fiado).reduce((s, v) => s + Number(v.total), 0);
-  const totalPagosTodos = window.__clienteDetalleCobros.reduce((s, c) => s + Number(c.monto), 0);
-  const deudaTotal = totalVentasFiado - totalPagosTodos;
+  const deudaTotal = ventas.filter((v) => v.es_fiado).reduce((s, v) => s + Math.max(0, Number(v.total) - pagadoDeVenta(v.id)), 0);
   const pagosSinVenta = window.__clienteDetalleCobros.filter((c) => !c.venta_id).reduce((s, c) => s + Number(c.monto), 0);
  
   content.innerHTML = `
@@ -893,7 +903,7 @@ function renderClienteDetalle(content) {
     <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
       <p class="font-display text-[18px] font-semibold text-[#241C2E]">${cliente.nombre}</p>
       <p class="text-[13px] mt-1 ${deudaTotal > 0 ? 'text-[#D64545] font-semibold' : 'text-[#2F9E7A] font-semibold'}">${deudaTotal > 0 ? `Debe en total ${fmt(deudaTotal)}` : "Sin deuda pendiente"}</p>
-      ${pagosSinVenta > 0 ? `<p class="text-[11px] text-[#8a7d94] mt-1">Incluye ${fmt(pagosSinVenta)} en pagos generales de antes, sin venta puntual asociada</p>` : ""}
+      ${pagosSinVenta > 0 ? `<p class="text-[11px] text-[#8a7d94] mt-1">Aparte, hay ${fmt(pagosSinVenta)} en pagos viejos sin venta asociada (no están descontados de este total)</p>` : ""}
     </div>
  
     ${sectionLabel("Historial de compras")}
@@ -1312,6 +1322,16 @@ async function saveNewCompra() {
     monto_transferencia = total;
   }
  
+  const saldos = saldosCajaActual();
+  if (monto_efectivo > saldos.efectivo) {
+    alert(`No hay suficiente efectivo en caja. Disponible: ${fmt(saldos.efectivo)}, necesitás ${fmt(monto_efectivo)}.`);
+    return;
+  }
+  if (monto_transferencia > saldos.banco) {
+    alert(`No hay suficiente saldo en la cuenta bancaria. Disponible: ${fmt(saldos.banco)}, necesitás ${fmt(monto_transferencia)}.`);
+    return;
+  }
+ 
   const { data: compra, error } = await sb
     .from("compras")
     .insert({ proveedor_id, tipo, total, registrado_por, medio_pago, monto_efectivo, monto_transferencia })
@@ -1346,6 +1366,27 @@ async function saveEditCompra() {
   const tipo = document.getElementById("compra-tipo").value;
   const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
   const compraId = window.__editingCompraId;
+ 
+  // Validar antes de escribir nada: que ningún ajuste deje el stock en negativo
+  for (const it of window.__compraItems) {
+    const original = window.__originalCompraItems.find((o) => o.id === it.id);
+    const delta = it.cantidad - (original?.cantidad || 0);
+    const p = productos.find((pr) => pr.id === it.producto_id);
+    if (p && p.stock + delta * factorConversion(p) < 0) {
+      alert(`Ese cambio dejaría el stock de "${p.nombre}" en negativo.`);
+      return;
+    }
+  }
+  for (const original of window.__originalCompraItems) {
+    const sigueExistiendo = window.__compraItems.some((it) => it.id === original.id);
+    if (!sigueExistiendo) {
+      const p = productos.find((pr) => pr.id === original.producto_id);
+      if (p && p.stock - original.cantidad * factorConversion(p) < 0) {
+        alert(`Quitar "${p.nombre}" de esta compra dejaría su stock en negativo.`);
+        return;
+      }
+    }
+  }
  
   // Items que ya existían: ajustar el stock por la diferencia y actualizar la fila
   for (const it of window.__compraItems) {
@@ -1682,6 +1723,34 @@ async function confirmSale() {
  
   let monto_efectivo = 0, monto_transferencia = 0;
  
+  // Validar que haya stock suficiente de todo antes de tocar la base de datos
+  for (const [id, qty] of items) {
+    const p = productos.find((pr) => pr.id === Number(id));
+    if (qty > p.stock) { alert(`No hay suficiente stock de "${p.nombre}". Disponible: ${p.stock}.`); return; }
+  }
+  if (heladoCart.length > 0) {
+    const necesarioPorId = {};
+    const sumarNecesario = (id, cant) => { necesarioPorId[id] = (necesarioPorId[id] || 0) + cant; };
+    const vasito = insumoPorNombre("Vasito");
+    const cucurucho = insumoPorNombre("Cucurucho");
+    const cucharita = insumoPorNombre("Cucharita");
+    const servilleta = insumoPorNombre("Servilleta");
+    const cobertura = insumoPorNombre("Cobertura");
+    const poteIsopor = insumoPorNombre("Pote de Isopor 1/4");
+    heladoCart.forEach((h) => {
+      h.bolas.forEach((saborId) => sumarNecesario(saborId, 1));
+      if (h.tipo === "bola" && h.envaseId) sumarNecesario(h.envaseId, 1);
+      if (h.tipo === "pote14" && poteIsopor) sumarNecesario(poteIsopor.id, 1);
+      if (cucharita) sumarNecesario(cucharita.id, 1);
+      if (servilleta) sumarNecesario(servilleta.id, 1);
+      if (h.cobertura && cobertura) sumarNecesario(cobertura.id, 1);
+    });
+    for (const [id, necesario] of Object.entries(necesarioPorId)) {
+      const p = productos.find((pr) => pr.id === Number(id));
+      if (p && necesario > p.stock) { alert(`No hay suficiente stock de "${p.nombre}". Disponible: ${p.stock}, necesitás ${necesario}.`); return; }
+    }
+  }
+ 
   const calculo = calcularCarritoPromos();
   let subtotalTotal = calculo.subtotalTotal, descuentoTotal = calculo.descuentoTotal;
   const lineas = calculo.lineas.map((l) => ({
@@ -1848,6 +1917,7 @@ async function saveEditProduct(id) {
   const presentacion = document.getElementById("edit-presentacion").value.trim() || null;
   const es_insumo = document.getElementById("edit-es-insumo").checked;
   const stock = Number(document.getElementById("edit-stock").value);
+  if (stock < 0) { alert("El stock no puede quedar en negativo."); return; }
   const stock_minimo = Number(document.getElementById("edit-minimo").value);
   const precio_venta = Number(document.getElementById("edit-precio").value);
   const costo_ultimo = Number(document.getElementById("edit-costo").value);
