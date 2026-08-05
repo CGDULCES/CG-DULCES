@@ -52,7 +52,7 @@
         <p class="text-[12px] text-white/70">Panel del negocio</p>
       </div>
       <div class="flex items-center gap-3">
-        <button onclick="irA('auditoria')" class="text-[11px] text-white/70 underline">Auditoría</button>
+        <button onclick="irA('masopciones')" class="text-[11px] text-white/70 underline">Más</button>
         <button id="logout-btn" class="text-[11px] text-white/70 underline">Salir</button>
       </div>
     </div>
@@ -265,7 +265,7 @@ async function loadUsuarios() {
 async function loadVentas() {
   const { data, error } = await sb
     .from("ventas")
-    .select("id, total, subtotal, descuento_total, medio_pago, registrado_por, created_at, venta_items(cantidad, precio_unitario, costo_unitario, subtotal, producto_id, productos(nombre))")
+    .select("id, total, subtotal, descuento_total, medio_pago, registrado_por, created_at, venta_items(cantidad, precio_unitario, costo_unitario, subtotal, producto_id, productos(nombre, categoria_id))")
     .order("created_at", { ascending: false })
     .limit(60);
   if (error) { console.error(error); return; }
@@ -424,7 +424,7 @@ function sectionLabel(text) {
 // ---------- Render principal ----------
 function render() {
   const content = document.getElementById("content");
-  const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes", "auditoria": "" };
+  const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes", "auditoria": "", "masopciones": "", "reportes": "", "promociones": "", "configuracion": "" };
   const grupoActivo = mapaGrupo[activeTab] || activeTab;
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === grupoActivo));
   document.getElementById("add-product-fab").classList.toggle("screen-hidden", activeTab !== "inventario");
@@ -438,6 +438,10 @@ function render() {
   if (activeTab === "cliente-detalle") renderClienteDetalle(content);
   if (activeTab === "compras") renderCompras(content);
   if (activeTab === "auditoria") renderAuditoria(content);
+  if (activeTab === "masopciones") renderMasOpciones(content);
+  if (activeTab === "reportes") renderReportes(content);
+  if (activeTab === "promociones") renderPromociones(content);
+  if (activeTab === "configuracion") renderConfiguracion(content);
   renderCartBar();
 }
  
@@ -825,34 +829,73 @@ async function confirmarDividirCuenta() {
   await loadAll();
 }
  
+let buscarVender = "";
+ 
+function cambiarBuscarVender(valor) {
+  buscarVender = valor;
+  render();
+}
+ 
+function renderTarjetaProducto(p, cat) {
+  const qty = cart[p.id] || 0;
+  const color = categoryColors[cat] || "#6B2D5C";
+  const promo = promoParaProducto(p);
+  const promoActiva = promo && cantidadGrupoEnCarrito(promo) >= promo.cantidad_requerida;
+  return `
+  <div class="bg-white rounded-2xl p-3.5 shadow-sm border border-black/[0.04] flex flex-col gap-2">
+    <div class="flex items-center gap-1.5">
+      <span class="w-2 h-2 rounded-full shrink-0" style="background:${color}"></span>
+      <span class="text-[10px] uppercase tracking-wide text-[#8a7d94] font-semibold truncate">${p.presentacion || cat}</span>
+    </div>
+    <p class="text-[13px] font-semibold text-[#241C2E] leading-tight">${p.nombre}</p>
+    <p class="font-mono-num text-[13px] text-[#6B2D5C] font-semibold">${fmt(p.precio_venta)}</p>
+    ${promo ? `<p class="text-[10px] text-[#2F9E7A] font-medium">${promoActiva ? "✓ Promo aplicada" : `Promo ${promo.cantidad_requerida}x ${fmt(promo.precio_promocional)}${promo.categoria_id ? " (combinable)" : ""}`}</p>` : ""}
+    <div class="flex items-center justify-between mt-1">
+      <button onclick="changeQty(${p.id}, -1)" class="w-7 h-7 rounded-full bg-[#F7F3FA] flex items-center justify-center" ${qty===0?"disabled style='opacity:.3'":""}>−</button>
+      <span class="font-mono-num text-[14px] font-semibold w-6 text-center">${qty}</span>
+      <button onclick="changeQty(${p.id}, 1)" class="w-7 h-7 rounded-full bg-[#6B2D5C] text-white flex items-center justify-center" ${qty>=p.stock?"disabled style='opacity:.3'":""}>+</button>
+    </div>
+  </div>`;
+}
+ 
 function renderVender(content) {
   let html = renderEstadoCaja();
-  const grupos = agruparPorCategoria(ventasVisibles());
+  html += `
+    <input type="text" placeholder="🔍 Buscar producto..." value="${buscarVender}" oninput="cambiarBuscarVender(this.value)" class="w-full bg-white border border-black/[0.06] rounded-xl px-3 py-2.5 text-[13px] mb-4 outline-none" />
+  `;
+ 
+  const termino = buscarVender.trim().toLowerCase();
+  const visibles = ventasVisibles().filter((p) => !termino || p.nombre.toLowerCase().includes(termino));
+ 
+  if (termino) {
+    // Modo búsqueda: lista simple sin categorías ni favoritos
+    html += `
+      <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 mb-5">
+        ${visibles.length === 0 ? `<p class="text-[13px] text-[#8a7d94] col-span-2">No encontré productos con ese nombre.</p>` : visibles.map((p) => renderTarjetaProducto(p, p.categorias?.nombre || "")).join("")}
+      </div>
+    `;
+    content.innerHTML = html;
+    return;
+  }
+ 
+  const favoritos = ventasVisibles().filter((p) => p.favorito);
+  if (favoritos.length > 0) {
+    html += `
+      <div class="mb-5">
+        ${sectionLabel("⭐ Favoritos")}
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+          ${favoritos.map((p) => renderTarjetaProducto(p, p.categorias?.nombre || "")).join("")}
+        </div>
+      </div>
+    `;
+  }
+ 
+  const grupos = agruparPorCategoria(visibles);
   html += Object.entries(grupos).map(([cat, lista]) => `
     <div class="mb-5">
       ${sectionLabel(cat)}
       <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-        ${lista.map((p) => {
-          const qty = cart[p.id] || 0;
-          const color = categoryColors[cat] || "#6B2D5C";
-          const promo = promoParaProducto(p);
-          const promoActiva = promo && cantidadGrupoEnCarrito(promo) >= promo.cantidad_requerida;
-          return `
-          <div class="bg-white rounded-2xl p-3.5 shadow-sm border border-black/[0.04] flex flex-col gap-2">
-            <div class="flex items-center gap-1.5">
-              <span class="w-2 h-2 rounded-full shrink-0" style="background:${color}"></span>
-              <span class="text-[10px] uppercase tracking-wide text-[#8a7d94] font-semibold truncate">${p.presentacion || cat}</span>
-            </div>
-            <p class="text-[13px] font-semibold text-[#241C2E] leading-tight">${p.nombre}</p>
-            <p class="font-mono-num text-[13px] text-[#6B2D5C] font-semibold">${fmt(p.precio_venta)}</p>
-            ${promo ? `<p class="text-[10px] text-[#2F9E7A] font-medium">${promoActiva ? "✓ Promo aplicada" : `Promo ${promo.cantidad_requerida}x ${fmt(promo.precio_promocional)}${promo.categoria_id ? " (combinable)" : ""}`}</p>` : ""}
-            <div class="flex items-center justify-between mt-1">
-              <button onclick="changeQty(${p.id}, -1)" class="w-7 h-7 rounded-full bg-[#F7F3FA] flex items-center justify-center" ${qty===0?"disabled style='opacity:.3'":""}>−</button>
-              <span class="font-mono-num text-[14px] font-semibold w-6 text-center">${qty}</span>
-              <button onclick="changeQty(${p.id}, 1)" class="w-7 h-7 rounded-full bg-[#6B2D5C] text-white flex items-center justify-center" ${qty>=p.stock?"disabled style='opacity:.3'":""}>+</button>
-            </div>
-          </div>`;
-        }).join("")}
+        ${lista.map((p) => renderTarjetaProducto(p, cat)).join("")}
       </div>
     </div>
   `).join("");
@@ -897,18 +940,30 @@ function renderVender(content) {
  
 let inventarioVista = "productos"; // "productos" | "insumos"
  
+let buscarInventario = "";
+ 
+function cambiarBuscarInventario(valor) {
+  buscarInventario = valor;
+  render();
+}
+ 
 function renderInventario(content) {
-  const lista = inventarioVista === "insumos"
+  const base = inventarioVista === "insumos"
     ? productos.filter((p) => p.es_insumo)
     : productos.filter((p) => !p.es_insumo);
+  const termino = buscarInventario.trim().toLowerCase();
+  const lista = base.filter((p) => !termino || p.nombre.toLowerCase().includes(termino));
   const grupos = agruparPorCategoria(lista);
  
   let html = `
-    <div class="flex gap-2 mb-4">
+    <div class="flex gap-2 mb-3">
       <button onclick="cambiarVistaInventario('productos')" class="flex-1 rounded-xl py-2 text-[13px] font-semibold ${inventarioVista==='productos' ? 'bg-[#6B2D5C] text-white' : 'bg-white text-[#8a7d94] border border-black/[0.06]'}">Productos</button>
       <button onclick="cambiarVistaInventario('insumos')" class="flex-1 rounded-xl py-2 text-[13px] font-semibold ${inventarioVista==='insumos' ? 'bg-[#6B2D5C] text-white' : 'bg-white text-[#8a7d94] border border-black/[0.06]'}">Insumos</button>
     </div>
+    <input type="text" placeholder="🔍 Buscar..." value="${buscarInventario}" oninput="cambiarBuscarInventario(this.value)" class="w-full bg-white border border-black/[0.06] rounded-xl px-3 py-2.5 text-[13px] mb-4 outline-none" />
   `;
+ 
+  if (lista.length === 0) html += `<p class="text-[13px] text-[#8a7d94]">No encontré nada con ese nombre.</p>`;
  
   html += Object.entries(grupos).map(([cat, itemsCat]) => `
     <div class="mb-5">
@@ -918,12 +973,13 @@ function renderInventario(content) {
           const color = categoryColors[cat] || "#6B2D5C";
           const low = p.stock <= p.stock_minimo;
           const pct = p.stock_minimo > 0 ? Math.min(100, (p.stock / (p.stock_minimo * 3)) * 100) : 100;
+          const margen = !p.es_insumo && p.precio_venta > 0 ? Math.round(((p.precio_venta - p.costo_ultimo) / p.precio_venta) * 100) : null;
           return `
           <button onclick="openEditProduct(${p.id})" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
             <div class="flex items-center justify-between mb-2">
               <div>
-                <p class="text-[13px] font-semibold text-[#241C2E]">${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</p>
-                <p class="text-[11px] text-[#8a7d94]">${cat} · costo ${fmt(p.costo_ultimo)}${p.es_insumo ? "" : " · venta " + fmt(p.precio_venta)}</p>
+                <p class="text-[13px] font-semibold text-[#241C2E]">${p.favorito ? "⭐ " : ""}${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</p>
+                <p class="text-[11px] text-[#8a7d94]">${cat} · costo ${fmt(p.costo_ultimo)}${p.es_insumo ? "" : " · venta " + fmt(p.precio_venta)}${margen !== null ? ` · margen ${margen}%` : ""}</p>
               </div>
               <div class="text-right">
                 <p class="font-mono-num text-[14px] font-semibold" style="color:${low?'#D64545':'#241C2E'}">${p.stock}</p>
@@ -1014,12 +1070,22 @@ function totalCompradoCliente(clienteId) {
   return directo + compartido;
 }
  
+let buscarClientes = "";
+function cambiarBuscarClientes(valor) {
+  buscarClientes = valor;
+  render();
+}
+ 
 function renderClientes(content) {
-  const ordenados = [...clientes].sort((a, b) => totalCompradoCliente(b.id) - totalCompradoCliente(a.id));
+  const termino = buscarClientes.trim().toLowerCase();
+  const ordenados = [...clientes]
+    .filter((c) => !termino || c.nombre.toLowerCase().includes(termino))
+    .sort((a, b) => totalCompradoCliente(b.id) - totalCompradoCliente(a.id));
   content.innerHTML = `
     ${sectionLabel("Clientes (ordenados por cuánto compraron)")}
+    <input type="text" placeholder="🔍 Buscar cliente..." value="${buscarClientes}" oninput="cambiarBuscarClientes(this.value)" class="w-full bg-white border border-black/[0.06] rounded-xl px-3 py-2.5 text-[13px] mb-4 outline-none" />
     <div class="space-y-2 mb-4">
-      ${ordenados.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Todavía no cargaste clientes.</p>` :
+      ${ordenados.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">${termino ? "No encontré clientes con ese nombre." : "Todavía no cargaste clientes."}</p>` :
         ordenados.map((c) => {
           const deuda = deudaCliente(c.id);
           const comprado = totalCompradoCliente(c.id);
@@ -1418,6 +1484,254 @@ async function saveCobro(clienteId) {
   render();
 }
  
+// ---------- Más opciones ----------
+function renderMasOpciones(content) {
+  content.innerHTML = `
+    <button onclick="irA('dashboard')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver al Dashboard</button>
+    ${sectionLabel("Más opciones")}
+    <div class="space-y-3">
+      <button onclick="abrirReportes()" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
+        <span class="text-[14px] font-semibold text-[#241C2E]">Reportes</span><span class="text-[#8a7d94]">›</span>
+      </button>
+      <button onclick="irA('promociones')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
+        <span class="text-[14px] font-semibold text-[#241C2E]">Promociones</span><span class="text-[#8a7d94]">›</span>
+      </button>
+      <button onclick="irA('auditoria')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
+        <span class="text-[14px] font-semibold text-[#241C2E]">Auditoría</span><span class="text-[#8a7d94]">›</span>
+      </button>
+      <button onclick="irA('configuracion')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
+        <span class="text-[14px] font-semibold text-[#241C2E]">Configuración</span><span class="text-[#8a7d94]">›</span>
+      </button>
+    </div>
+  `;
+}
+ 
+// ---------- Reportes ----------
+window.__reportesVentas = [];
+window.__reportesPeriodo = "mes";
+let reportesChartInstance = null;
+ 
+async function abrirReportes() {
+  const { data } = await sb
+    .from("ventas")
+    .select("id, total, created_at, venta_items(cantidad, subtotal, costo_unitario, productos(nombre, categoria_id))")
+    .order("created_at", { ascending: false })
+    .limit(1000);
+  window.__reportesVentas = data || [];
+  activeTab = "reportes";
+  render();
+}
+ 
+function cambiarPeriodoReportes(periodo) {
+  window.__reportesPeriodo = periodo;
+  render();
+}
+ 
+function renderReportes(content) {
+  const ventasR = window.__reportesVentas;
+  const ahora = new Date();
+  let desde;
+  if (window.__reportesPeriodo === "semana") { desde = new Date(); desde.setDate(desde.getDate() - 7); }
+  else if (window.__reportesPeriodo === "mes") { desde = new Date(); desde.setMonth(desde.getMonth() - 1); }
+  else desde = new Date(2000, 0, 1);
+ 
+  const filtradas = ventasR.filter((v) => new Date(v.created_at) >= desde);
+  const totalVentas = filtradas.reduce((s, v) => s + Number(v.total), 0);
+  const totalGanancia = filtradas.reduce((s, v) => s + (v.venta_items || []).reduce((si, it) => si + (it.subtotal - it.costo_unitario * it.cantidad), 0), 0);
+ 
+  // Por categoría
+  const porCategoria = {};
+  filtradas.forEach((v) => (v.venta_items || []).forEach((it) => {
+    const catId = it.productos?.categoria_id;
+    const cat = categorias.find((c) => c.id === catId)?.nombre || "Sin categoría";
+    porCategoria[cat] = (porCategoria[cat] || 0) + Number(it.subtotal);
+  }));
+  const categoriasOrdenadas = Object.entries(porCategoria).sort((a, b) => b[1] - a[1]);
+ 
+  // Por mes (últimos 6)
+  const meses = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(ahora.getFullYear(), ahora.getMonth() - i, 1);
+    meses.push(d);
+  }
+  const totalesPorMes = meses.map((m) =>
+    ventasR.filter((v) => {
+      const fv = new Date(v.created_at);
+      return fv.getFullYear() === m.getFullYear() && fv.getMonth() === m.getMonth();
+    }).reduce((s, v) => s + Number(v.total), 0)
+  );
+  const labelsMeses = meses.map((m) => m.toLocaleDateString("es-PY", { month: "short" }));
+ 
+  content.innerHTML = `
+    <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Reportes")}
+ 
+    <div class="flex gap-2 mb-4">
+      <button onclick="cambiarPeriodoReportes('semana')" class="flex-1 rounded-xl py-2 text-[12px] font-semibold ${window.__reportesPeriodo==='semana' ? 'bg-[#6B2D5C] text-white' : 'bg-white text-[#8a7d94] border border-black/[0.06]'}">Semana</button>
+      <button onclick="cambiarPeriodoReportes('mes')" class="flex-1 rounded-xl py-2 text-[12px] font-semibold ${window.__reportesPeriodo==='mes' ? 'bg-[#6B2D5C] text-white' : 'bg-white text-[#8a7d94] border border-black/[0.06]'}">Último mes</button>
+      <button onclick="cambiarPeriodoReportes('todo')" class="flex-1 rounded-xl py-2 text-[12px] font-semibold ${window.__reportesPeriodo==='todo' ? 'bg-[#6B2D5C] text-white' : 'bg-white text-[#8a7d94] border border-black/[0.06]'}">Todo</button>
+    </div>
+ 
+    <div class="grid grid-cols-2 gap-3 mb-4">
+      <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Ventas del período</p>
+        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(totalVentas)}</p>
+      </div>
+      <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Ganancia del período</p>
+        <p class="font-mono-num text-[17px] font-semibold text-[#2F9E7A]">${fmt(totalGanancia)}</p>
+      </div>
+    </div>
+ 
+    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
+      ${sectionLabel("Ventas por mes (últimos 6)")}
+      <div class="h-[140px]"><canvas id="reportesChart"></canvas></div>
+    </div>
+ 
+    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+      ${sectionLabel("Por categoría (período elegido)")}
+      <div class="space-y-2">
+        ${categoriasOrdenadas.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Sin ventas en este período.</p>` :
+          categoriasOrdenadas.map(([cat, monto]) => `
+          <div class="flex items-center justify-between text-[13px]">
+            <span class="text-[#241C2E]">${cat}</span>
+            <span class="font-mono-num font-semibold">${fmt(monto)}</span>
+          </div>`).join("")}
+      </div>
+    </div>
+  `;
+ 
+  const ctx = document.getElementById("reportesChart");
+  if (reportesChartInstance) reportesChartInstance.destroy();
+  reportesChartInstance = new Chart(ctx, {
+    type: "bar",
+    data: { labels: labelsMeses, datasets: [{ data: totalesPorMes, backgroundColor: "#6B2D5C", borderRadius: 6 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => fmt(c.raw) } } },
+      scales: { y: { display: false }, x: { grid: { display: false } } },
+    },
+  });
+}
+ 
+// ---------- Promociones ----------
+function renderPromociones(content) {
+  content.innerHTML = `
+    <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Promociones")}
+    <div class="space-y-2 mb-4">
+      ${promociones.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Todavía no hay promociones cargadas.</p>` :
+        promociones.map((p) => {
+          const destino = p.categoria_id ? categorias.find((c) => c.id === p.categoria_id)?.nombre + " (cualquier producto de la categoría)" : productos.find((pr) => pr.id === p.producto_id)?.nombre || "";
+          return `
+          <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-[13px] font-semibold text-[#241C2E]">${p.nombre}</span>
+              <button onclick="deletePromocion(${p.id})" class="text-[11px] text-[#D64545] font-semibold">Eliminar</button>
+            </div>
+            <p class="text-[12px] text-[#8a7d94]">${destino}</p>
+            <p class="text-[12px] text-[#241C2E] mt-1">${p.cantidad_requerida}x por ${fmt(p.precio_promocional)}</p>
+          </div>`;
+        }).join("")}
+    </div>
+    <button onclick="openNewPromocion()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">+ Nueva promoción</button>
+  `;
+}
+ 
+function openNewPromocion() {
+  const opcionesCategoria = categorias.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join("");
+  const opcionesProducto = ventasVisibles().map((p) => `<option value="${p.id}">${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</option>`).join("");
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Nueva promoción</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Nombre</label>
+    <input id="promo-nombre" type="text" placeholder="Ej: 2x1 Alfajores" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+ 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">¿A qué aplica?</label>
+    <select id="promo-tipo" onchange="cambiarTipoPromo(this.value)" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">
+      <option value="categoria">Una categoría entera (combinable entre sabores)</option>
+      <option value="producto">Un solo producto</option>
+    </select>
+    <div id="promo-destino-wrap">
+      <select id="promo-categoria" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mb-4 outline-none">${opcionesCategoria}</select>
+    </div>
+ 
+    <div class="grid grid-cols-2 gap-3 mb-5">
+      <div>
+        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cantidad</label>
+        <input id="promo-cantidad" type="number" value="2" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+      </div>
+      <div>
+        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Precio promo</label>
+        <input id="promo-precio" type="number" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+      </div>
+    </div>
+    <button onclick="saveNewPromocion()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Crear promoción</button>
+  `);
+  window.__promoTipo = "categoria";
+}
+ 
+function cambiarTipoPromo(tipo) {
+  window.__promoTipo = tipo;
+  const opcionesProducto = ventasVisibles().map((p) => `<option value="${p.id}">${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</option>`).join("");
+  const opcionesCategoria = categorias.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join("");
+  document.getElementById("promo-destino-wrap").innerHTML = tipo === "categoria"
+    ? `<select id="promo-categoria" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mb-4 outline-none">${opcionesCategoria}</select>`
+    : `<select id="promo-producto" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mb-4 outline-none">${opcionesProducto}</select>`;
+}
+ 
+async function saveNewPromocion() {
+  const nombre = document.getElementById("promo-nombre").value.trim();
+  if (!nombre) { alert("Poné un nombre."); return; }
+  const cantidad_requerida = Number(document.getElementById("promo-cantidad").value) || 2;
+  const precio_promocional = Number(document.getElementById("promo-precio").value) || 0;
+  const categoria_id = window.__promoTipo === "categoria" ? Number(document.getElementById("promo-categoria").value) : null;
+  const producto_id = window.__promoTipo === "producto" ? Number(document.getElementById("promo-producto").value) : null;
+ 
+  const { error } = await sb.from("promociones").insert({ nombre, categoria_id, producto_id, cantidad_requerida, precio_promocional });
+  if (error) { alert("No se pudo crear la promoción."); console.error(error); return; }
+  await registrarHistorial("promociones", null, "crear", `Promoción creada: ${nombre}`);
+  closeModal();
+  await loadAll();
+  activeTab = "promociones";
+  render();
+}
+ 
+async function deletePromocion(id) {
+  if (!confirm("¿Eliminar esta promoción?")) return;
+  await sb.from("promociones").delete().eq("id", id);
+  await registrarHistorial("promociones", id, "eliminar", `Promoción eliminada`);
+  await loadAll();
+  activeTab = "promociones";
+  render();
+}
+ 
+// ---------- Configuración ----------
+async function renderConfiguracion(content) {
+  const { data: config } = await sb.from("configuracion").select("*");
+  const nombreNegocio = config?.find((c) => c.clave === "nombre_negocio")?.valor || "CG Dulces";
+  content.innerHTML = `
+    <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Configuración")}
+    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
+      <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Nombre del negocio</label>
+      <input id="config-nombre" type="text" value="${nombreNegocio}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+      <button onclick="guardarConfiguracion()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Guardar</button>
+    </div>
+    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+      <p class="text-[12px] text-[#8a7d94]">Usuario actual</p>
+      <p class="text-[14px] font-semibold text-[#241C2E]">${usuarios[0]?.nombre || ""}</p>
+    </div>
+  `;
+}
+ 
+async function guardarConfiguracion() {
+  const valor = document.getElementById("config-nombre").value.trim();
+  if (!valor) return;
+  await sb.from("configuracion").upsert({ clave: "nombre_negocio", valor });
+  await registrarHistorial("configuracion", null, "editar", `Nombre del negocio cambiado a: ${valor}`);
+  alert("Guardado.");
+}
+ 
 // ---------- Auditoría ----------
 const ICONO_ACCION = { crear: "🟢", editar: "🟡", eliminar: "🔴" };
 const NOMBRE_TABLA = {
@@ -1477,6 +1791,7 @@ function openNewCompra() {
   window.__editingCompraId = null;
   window.__originalCompraItems = [];
   window.__compraTipo = "mercaderia";
+  window.__compraFecha = new Date().toISOString().slice(0, 10);
   const primerProducto = productos.find((p) => !p.es_insumo);
   window.__compraItems = [{ producto_id: primerProducto?.id, cantidad: 1, costo_unitario: 0 }];
   renderCompraModal();
@@ -1487,6 +1802,7 @@ function openEditCompra(id) {
   if (!c) return;
   window.__editingCompraId = id;
   window.__compraTipo = c.tipo;
+  window.__compraFecha = new Date(c.created_at).toISOString().slice(0, 10);
   window.__compraItems = (c.compra_items || []).map((it) => ({ id: it.id, producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario }));
   window.__originalCompraItems = JSON.parse(JSON.stringify(window.__compraItems));
   window.__editingProveedorId = c.proveedor_id;
@@ -1541,6 +1857,8 @@ function renderCompraModal() {
  
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">${editando ? "Editar compra" : "Nueva compra"}</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Fecha de la compra</label>
+    <input id="compra-fecha" type="date" value="${window.__compraFecha}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Proveedor</label>
     <select id="compra-proveedor" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">${opcionesProveedor}</select>
  
@@ -1643,6 +1961,8 @@ async function aplicarConsumoIlimitado(producto, cantidadNecesaria) {
 async function saveNewCompra() {
   const proveedor_id = Number(document.getElementById("compra-proveedor").value) || null;
   const tipo = document.getElementById("compra-tipo").value;
+  const fecha = document.getElementById("compra-fecha").value;
+  const created_at = new Date(fecha + "T12:00:00").toISOString();
   const registrado_por = usuarios[0]?.nombre || "";
   const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
   const medio_pago = window.__medioPagoCompra || "efectivo";
@@ -1673,7 +1993,7 @@ async function saveNewCompra() {
  
   const { data: compra, error } = await sb
     .from("compras")
-    .insert({ proveedor_id, tipo, total, registrado_por, medio_pago, monto_efectivo, monto_transferencia })
+    .insert({ proveedor_id, tipo, total, registrado_por, medio_pago, monto_efectivo, monto_transferencia, created_at })
     .select().single();
   if (error) { alert("No se pudo registrar la compra."); console.error(error); return; }
  
@@ -1703,6 +2023,8 @@ async function saveNewCompra() {
 async function saveEditCompra() {
   const proveedor_id = Number(document.getElementById("compra-proveedor").value) || null;
   const tipo = document.getElementById("compra-tipo").value;
+  const fecha = document.getElementById("compra-fecha").value;
+  const created_at = new Date(fecha + "T12:00:00").toISOString();
   const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
   const compraId = window.__editingCompraId;
  
@@ -1753,7 +2075,7 @@ async function saveEditCompra() {
     }
   }
  
-  await sb.from("compras").update({ proveedor_id, tipo, total }).eq("id", compraId);
+  await sb.from("compras").update({ proveedor_id, tipo, total, created_at }).eq("id", compraId);
   await registrarHistorial("compras", compraId, "editar", `Compra editada, nuevo total ${fmt(total)}`);
  
   window.__editingCompraId = null;
@@ -2258,6 +2580,10 @@ async function openEditProduct(id) {
         <input type="checkbox" id="edit-es-insumo" ${p.es_insumo ? "checked" : ""} class="w-4 h-4" />
         <span class="text-[13px] text-[#241C2E]">Es un insumo (no se vende directo)</span>
       </label>
+      <label class="flex items-center gap-2">
+        <input type="checkbox" id="edit-favorito" ${p.favorito ? "checked" : ""} class="w-4 h-4" />
+        <span class="text-[13px] text-[#241C2E]">⭐ Favorito (venta rápida)</span>
+      </label>
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">${esConsumibleIlimitado ? `Paquetes sin abrir` : "Stock actual"}</label>
@@ -2295,8 +2621,27 @@ async function openEditProduct(id) {
         <button onclick="cargarHielo()" class="bg-[#6B2D5C] text-white text-[12px] font-semibold px-3 py-2 rounded-lg">Cargar</button>
       </div>
     </div>` : ""}
+    ${p.es_fabricado && !esConsumibleIlimitado && p.nombre !== "Hielo · Bolsa" && !["Helado · Bola", "Helado · Pote 1/4"].includes(p.nombre) ? `
+    <div class="bg-[#F7F3FA] rounded-xl p-3 mt-3">
+      <p class="text-[12px] font-semibold text-[#241C2E] mb-2">Registrar producción</p>
+      <p class="text-[11px] text-[#8a7d94] mb-2">Sumá al stock lo que acabás de preparar.</p>
+      <div class="flex items-center gap-2">
+        <input id="fabricar-cantidad" type="number" value="1" class="flex-1 bg-white rounded-lg px-3 py-2 text-[14px] outline-none" />
+        <button onclick="registrarProduccion(${p.id})" class="bg-[#6B2D5C] text-white text-[12px] font-semibold px-3 py-2 rounded-lg">Agregar</button>
+      </div>
+    </div>` : ""}
     <button onclick="deleteProduct(${p.id})" class="w-full text-[#D64545] text-[13px] font-semibold py-3 mt-1">Eliminar producto</button>
   `);
+}
+ 
+async function registrarProduccion(id) {
+  const cantidad = Number(document.getElementById("fabricar-cantidad").value) || 0;
+  if (cantidad <= 0) return;
+  const p = productos.find((pr) => pr.id === id);
+  await sb.from("productos").update({ stock: p.stock + cantidad }).eq("id", id);
+  await registrarHistorial("productos", id, "editar", `Producción registrada: +${cantidad} ${p.nombre}`);
+  closeModal();
+  await loadAll();
 }
  
 async function marcarConsumibleTerminado(id) {
@@ -2334,13 +2679,14 @@ async function saveEditProduct(id) {
   const categoria_id = Number(document.getElementById("edit-categoria").value);
   const presentacion = document.getElementById("edit-presentacion").value.trim() || null;
   const es_insumo = document.getElementById("edit-es-insumo").checked;
+  const favorito = document.getElementById("edit-favorito").checked;
   const stock = Number(document.getElementById("edit-stock").value);
   if (stock < 0) { alert("El stock no puede quedar en negativo."); return; }
   const stock_minimo = Number(document.getElementById("edit-minimo").value);
   const precio_venta = Number(document.getElementById("edit-precio").value);
   const costo_ultimo = Number(document.getElementById("edit-costo").value);
   const anterior = productos.find((p) => p.id === id);
-  const { error } = await sb.from("productos").update({ nombre, categoria_id, presentacion, es_insumo, stock, stock_minimo, precio_venta, costo_ultimo }).eq("id", id);
+  const { error } = await sb.from("productos").update({ nombre, categoria_id, presentacion, es_insumo, favorito, stock, stock_minimo, precio_venta, costo_ultimo }).eq("id", id);
   if (error) { alert("No se pudo guardar."); console.error(error); return; }
   const cambioStock = anterior && anterior.stock !== stock ? ` (stock ${anterior.stock} → ${stock})` : "";
   await registrarHistorial("productos", id, "editar", `Editado: ${nombre}${cambioStock}`);
