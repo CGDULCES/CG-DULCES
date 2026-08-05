@@ -59,7 +59,7 @@
   </div>
  
   <!-- Contenido -->
-  <div id="content" class="flex-1 overflow-y-auto px-5 pb-4 pt-5">
+  <div id="content" class="flex-1 overflow-y-auto px-5 pb-32 pt-5">
     <p class="text-center text-[13px] text-[#8a7d94] pt-10">Cargando...</p>
   </div>
  
@@ -599,7 +599,8 @@ function renderEstadoCaja() {
  
   html += `
     <button onclick="openDividirCuenta()" class="w-full flex items-center justify-center gap-2 bg-white border border-black/[0.06] rounded-xl px-4 py-2.5 mb-5">
-      <span class="text-[12px] text-[#6B2D5C] font-semibold">👥 Dividir cuenta entre varios clientes</span>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6B2D5C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <span class="text-[12px] text-[#6B2D5C] font-semibold">Dividir cuenta entre varios clientes</span>
     </button>`;
  
   return html;
@@ -721,6 +722,7 @@ function openDividirCuenta() {
   window.__divCuentaSeleccion = new Set();
   window.__divCuentaProductoId = ventasVisibles()[0]?.id;
   window.__divCuentaCantidad = 1;
+  window.__divCuentaFecha = new Date().toISOString().slice(0, 10);
   renderDividirCuentaModal();
 }
  
@@ -733,6 +735,9 @@ function renderDividirCuentaModal() {
  
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Dividir cuenta</p>
+ 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Fecha</label>
+    <input id="div-fecha" type="date" value="${window.__divCuentaFecha}" onchange="window.__divCuentaFecha = this.value" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
  
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Producto</label>
     <select id="div-producto" onchange="cambiarProductoDivCuenta(this.value)" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">
@@ -804,11 +809,12 @@ async function confirmarDividirCuenta() {
  
   const total = producto.precio_venta * cantidad;
   const registrado_por = usuarios[0]?.nombre || "";
+  const created_at = new Date(window.__divCuentaFecha + "T12:00:00").toISOString();
  
   // Un solo registro de venta (para el stock), a nombre del primer cliente elegido
   const { data: venta, error } = await sb
     .from("ventas")
-    .insert({ subtotal: total, descuento_total: 0, total, medio_pago: "fiado", registrado_por, cliente_id: seleccion[0], es_fiado: true })
+    .insert({ subtotal: total, descuento_total: 0, total, medio_pago: "fiado", registrado_por, cliente_id: seleccion[0], es_fiado: true, created_at })
     .select().single();
   if (error) { alert("No se pudo registrar."); console.error(error); return; }
  
@@ -831,9 +837,19 @@ async function confirmarDividirCuenta() {
  
 let buscarVender = "";
  
+function refocusInput(id) {
+  const el = document.getElementById(id);
+  if (el) {
+    el.focus();
+    const pos = el.value.length;
+    el.setSelectionRange(pos, pos);
+  }
+}
+ 
 function cambiarBuscarVender(valor) {
   buscarVender = valor;
   render();
+  refocusInput("buscar-vender-input");
 }
  
 function renderTarjetaProducto(p, cat) {
@@ -861,7 +877,10 @@ function renderTarjetaProducto(p, cat) {
 function renderVender(content) {
   let html = renderEstadoCaja();
   html += `
-    <input type="text" placeholder="🔍 Buscar producto..." value="${buscarVender}" oninput="cambiarBuscarVender(this.value)" class="w-full bg-white border border-black/[0.06] rounded-xl px-3 py-2.5 text-[13px] mb-4 outline-none" />
+    <div class="relative mb-4">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8a7d94" stroke-width="2" stroke-linecap="round" class="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="buscar-vender-input" type="text" placeholder="Buscar producto..." value="${buscarVender}" oninput="cambiarBuscarVender(this.value)" class="w-full bg-white border border-black/[0.06] rounded-xl pl-9 pr-3 py-2.5 text-[13px] outline-none" />
+    </div>
   `;
  
   const termino = buscarVender.trim().toLowerCase();
@@ -945,6 +964,7 @@ let buscarInventario = "";
 function cambiarBuscarInventario(valor) {
   buscarInventario = valor;
   render();
+  refocusInput("buscar-inventario-input");
 }
  
 function renderInventario(content) {
@@ -960,7 +980,10 @@ function renderInventario(content) {
       <button onclick="cambiarVistaInventario('productos')" class="flex-1 rounded-xl py-2 text-[13px] font-semibold ${inventarioVista==='productos' ? 'bg-[#6B2D5C] text-white' : 'bg-white text-[#8a7d94] border border-black/[0.06]'}">Productos</button>
       <button onclick="cambiarVistaInventario('insumos')" class="flex-1 rounded-xl py-2 text-[13px] font-semibold ${inventarioVista==='insumos' ? 'bg-[#6B2D5C] text-white' : 'bg-white text-[#8a7d94] border border-black/[0.06]'}">Insumos</button>
     </div>
-    <input type="text" placeholder="🔍 Buscar..." value="${buscarInventario}" oninput="cambiarBuscarInventario(this.value)" class="w-full bg-white border border-black/[0.06] rounded-xl px-3 py-2.5 text-[13px] mb-4 outline-none" />
+    <div class="relative mb-4">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8a7d94" stroke-width="2" stroke-linecap="round" class="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="buscar-inventario-input" type="text" placeholder="Buscar..." value="${buscarInventario}" oninput="cambiarBuscarInventario(this.value)" class="w-full bg-white border border-black/[0.06] rounded-xl pl-9 pr-3 py-2.5 text-[13px] outline-none" />
+    </div>
   `;
  
   if (lista.length === 0) html += `<p class="text-[13px] text-[#8a7d94]">No encontré nada con ese nombre.</p>`;
@@ -1074,6 +1097,7 @@ let buscarClientes = "";
 function cambiarBuscarClientes(valor) {
   buscarClientes = valor;
   render();
+  refocusInput("buscar-clientes-input");
 }
  
 function renderClientes(content) {
@@ -1083,7 +1107,10 @@ function renderClientes(content) {
     .sort((a, b) => totalCompradoCliente(b.id) - totalCompradoCliente(a.id));
   content.innerHTML = `
     ${sectionLabel("Clientes (ordenados por cuánto compraron)")}
-    <input type="text" placeholder="🔍 Buscar cliente..." value="${buscarClientes}" oninput="cambiarBuscarClientes(this.value)" class="w-full bg-white border border-black/[0.06] rounded-xl px-3 py-2.5 text-[13px] mb-4 outline-none" />
+    <div class="relative mb-4">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8a7d94" stroke-width="2" stroke-linecap="round" class="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="buscar-clientes-input" type="text" placeholder="Buscar cliente..." value="${buscarClientes}" oninput="cambiarBuscarClientes(this.value)" class="w-full bg-white border border-black/[0.06] rounded-xl pl-9 pr-3 py-2.5 text-[13px] outline-none" />
+    </div>
     <div class="space-y-2 mb-4">
       ${ordenados.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">${termino ? "No encontré clientes con ese nombre." : "Todavía no cargaste clientes."}</p>` :
         ordenados.map((c) => {
@@ -1712,16 +1739,64 @@ async function renderConfiguracion(content) {
   content.innerHTML = `
     <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
     ${sectionLabel("Configuración")}
+ 
     <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
       <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Nombre del negocio</label>
       <input id="config-nombre" type="text" value="${nombreNegocio}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
       <button onclick="guardarConfiguracion()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Guardar</button>
     </div>
+ 
+    ${sectionLabel("Vendedores (aparecen al confirmar una venta)")}
+    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
+      <div class="space-y-2 mb-3">
+        ${usuarios.map((u) => `
+          <div class="flex items-center justify-between">
+            <span class="text-[13px] text-[#241C2E]">${u.nombre}</span>
+            ${usuarios.length > 1 ? `<button onclick="deleteUsuarioApp(${u.id})" class="text-[11px] text-[#D64545] font-semibold">Eliminar</button>` : ""}
+          </div>`).join("")}
+      </div>
+      <div class="flex gap-2">
+        <input id="nuevo-usuario-nombre" type="text" placeholder="Nombre del vendedor" class="flex-1 bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] outline-none" />
+        <button onclick="agregarUsuarioApp()" class="bg-[#6B2D5C] text-white text-[13px] font-semibold px-3.5 rounded-xl">+</button>
+      </div>
+    </div>
+ 
+    ${sectionLabel("Seguridad")}
     <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
-      <p class="text-[12px] text-[#8a7d94]">Usuario actual</p>
-      <p class="text-[14px] font-semibold text-[#241C2E]">${usuarios[0]?.nombre || ""}</p>
+      <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cambiar contraseña de acceso</label>
+      <input id="config-password-nueva" type="password" placeholder="Nueva contraseña" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+      <button onclick="cambiarPassword()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Cambiar contraseña</button>
+      <p class="text-[11px] text-[#8a7d94] mt-2">Para cambiar el nombre de usuario con el que entrás, avisame y lo ajustamos juntas en Supabase.</p>
     </div>
   `;
+}
+ 
+async function agregarUsuarioApp() {
+  const nombre = document.getElementById("nuevo-usuario-nombre").value.trim();
+  if (!nombre) return;
+  const { error } = await sb.from("usuarios_app").insert({ nombre });
+  if (error) { alert("No se pudo agregar (puede que ya exista ese nombre)."); console.error(error); return; }
+  await registrarHistorial("usuarios_app", null, "crear", `Vendedor agregado: ${nombre}`);
+  await loadAll();
+  activeTab = "configuracion";
+  render();
+}
+ 
+async function deleteUsuarioApp(id) {
+  if (!confirm("¿Eliminar este vendedor de la lista?")) return;
+  await sb.from("usuarios_app").delete().eq("id", id);
+  await loadAll();
+  activeTab = "configuracion";
+  render();
+}
+ 
+async function cambiarPassword() {
+  const nueva = document.getElementById("config-password-nueva").value;
+  if (!nueva || nueva.length < 4) { alert("Poné una contraseña de al menos 4 caracteres."); return; }
+  const { error } = await sb.auth.updateUser({ password: nueva });
+  if (error) { alert("No se pudo cambiar la contraseña."); console.error(error); return; }
+  alert("Contraseña cambiada. La vas a usar la próxima vez que inicies sesión.");
+  document.getElementById("config-password-nueva").value = "";
 }
  
 async function guardarConfiguracion() {
@@ -1792,6 +1867,7 @@ function openNewCompra() {
   window.__originalCompraItems = [];
   window.__compraTipo = "mercaderia";
   window.__compraFecha = new Date().toISOString().slice(0, 10);
+  window.__compraDescuento = 0;
   const primerProducto = productos.find((p) => !p.es_insumo);
   window.__compraItems = [{ producto_id: primerProducto?.id, cantidad: 1, costo_unitario: 0 }];
   renderCompraModal();
@@ -1803,6 +1879,7 @@ function openEditCompra(id) {
   window.__editingCompraId = id;
   window.__compraTipo = c.tipo;
   window.__compraFecha = new Date(c.created_at).toISOString().slice(0, 10);
+  window.__compraDescuento = Number(c.descuento) || 0;
   window.__compraItems = (c.compra_items || []).map((it) => ({ id: it.id, producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario }));
   window.__originalCompraItems = JSON.parse(JSON.stringify(window.__compraItems));
   window.__editingProveedorId = c.proveedor_id;
@@ -1827,7 +1904,9 @@ function productosPorTipoCompra() {
 function renderCompraModal() {
   const editando = !!window.__editingCompraId;
   const opcionesProveedor = proveedores.map((p) => `<option value="${p.id}" ${editando && window.__editingProveedorId===p.id ? "selected":""}>${p.nombre}</option>`).join("");
-  const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+  const subtotalCompra = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+  const descuentoCompra = window.__compraDescuento || 0;
+  const total = Math.max(0, subtotalCompra - descuentoCompra);
   const productosDisponibles = productosPorTipoCompra();
  
   const filasHtml = window.__compraItems.map((it, i) => {
@@ -1858,7 +1937,7 @@ function renderCompraModal() {
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">${editando ? "Editar compra" : "Nueva compra"}</p>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Fecha de la compra</label>
-    <input id="compra-fecha" type="date" value="${window.__compraFecha}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+    <input id="compra-fecha" type="date" value="${window.__compraFecha}" onchange="window.__compraFecha = this.value" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Proveedor</label>
     <select id="compra-proveedor" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">${opcionesProveedor}</select>
  
@@ -1872,6 +1951,12 @@ function renderCompraModal() {
     <div class="mt-2 mb-2">${filasHtml}</div>
     <button onclick="agregarItemCompra()" class="text-[12px] text-[#6B2D5C] font-semibold mb-4">+ Agregar otro producto</button>
  
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Descuento manual (opcional)</label>
+    <input id="compra-descuento" type="number" value="${descuentoCompra}" onchange="window.__compraDescuento = Number(this.value) || 0; renderCompraModal();" placeholder="Ej: te hicieron un descuento por compra grande" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none" />
+ 
+    <div class="flex items-center justify-between mb-1 text-[12px] text-[#8a7d94]">
+      <span>Subtotal</span><span class="font-mono-num">${fmt(subtotalCompra)}</span>
+    </div>
     <div class="flex items-center justify-between mb-4">
       <span class="text-[12px] text-[#8a7d94]">Total</span>
       <span class="font-mono-num text-[18px] font-semibold text-[#241C2E]">${fmt(total)}</span>
@@ -1964,7 +2049,9 @@ async function saveNewCompra() {
   const fecha = document.getElementById("compra-fecha").value;
   const created_at = new Date(fecha + "T12:00:00").toISOString();
   const registrado_por = usuarios[0]?.nombre || "";
-  const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+  const descuento = window.__compraDescuento || 0;
+  const subtotal = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+  const total = Math.max(0, subtotal - descuento);
   const medio_pago = window.__medioPagoCompra || "efectivo";
  
   let monto_efectivo = 0, monto_transferencia = 0;
@@ -1993,7 +2080,7 @@ async function saveNewCompra() {
  
   const { data: compra, error } = await sb
     .from("compras")
-    .insert({ proveedor_id, tipo, total, registrado_por, medio_pago, monto_efectivo, monto_transferencia, created_at })
+    .insert({ proveedor_id, tipo, total, descuento, registrado_por, medio_pago, monto_efectivo, monto_transferencia, created_at })
     .select().single();
   if (error) { alert("No se pudo registrar la compra."); console.error(error); return; }
  
@@ -2025,7 +2112,9 @@ async function saveEditCompra() {
   const tipo = document.getElementById("compra-tipo").value;
   const fecha = document.getElementById("compra-fecha").value;
   const created_at = new Date(fecha + "T12:00:00").toISOString();
-  const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+  const descuento = window.__compraDescuento || 0;
+  const subtotal = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+  const total = Math.max(0, subtotal - descuento);
   const compraId = window.__editingCompraId;
  
   // Validar antes de escribir nada: que ningún ajuste deje el stock en negativo
@@ -2075,7 +2164,7 @@ async function saveEditCompra() {
     }
   }
  
-  await sb.from("compras").update({ proveedor_id, tipo, total, created_at }).eq("id", compraId);
+  await sb.from("compras").update({ proveedor_id, tipo, total, descuento, created_at }).eq("id", compraId);
   await registrarHistorial("compras", compraId, "editar", `Compra editada, nuevo total ${fmt(total)}`);
  
   window.__editingCompraId = null;
@@ -2285,6 +2374,7 @@ function openConfirmSale() {
   const totalHelados = heladoCart.reduce((s, h) => s + h.total, 0);
   const total = totalNormal + totalHelados;
   window.__ventaTotal = total;
+  window.__ventaFecha = new Date().toISOString().slice(0, 10);
   renderConfirmSaleModal();
   window.__medioPago = "efectivo";
 }
@@ -2297,6 +2387,9 @@ function renderConfirmSaleModal() {
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Confirmar venta</p>
     <p class="text-[13px] text-[#8a7d94] mb-1">Total</p>
     <p class="font-mono-num text-[22px] font-semibold text-[#241C2E] mb-4">${fmt(total)}</p>
+ 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Fecha de la venta</label>
+    <input id="venta-fecha" type="date" value="${window.__ventaFecha}" onchange="window.__ventaFecha = this.value" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none" />
  
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cliente</label>
     <select id="venta-cliente" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none">
@@ -2401,6 +2494,8 @@ async function confirmSale() {
   const cliente_id = clienteVal ? Number(clienteVal) : null;
   if (!cliente_id) { alert("Elegí un cliente (o creá uno rápido) para poder registrar la venta."); return; }
   const medio_pago = es_fiado ? "fiado" : (window.__medioPago || "efectivo");
+  const fechaVenta = document.getElementById("venta-fecha").value;
+  const created_at = new Date(fechaVenta + "T12:00:00").toISOString();
  
   let monto_efectivo = 0, monto_transferencia = 0;
  
@@ -2482,7 +2577,7 @@ async function confirmSale() {
  
   const { data: venta, error: ventaError } = await sb
     .from("ventas")
-    .insert({ subtotal: subtotalTotal, descuento_total: descuentoTotal, total, medio_pago, registrado_por, cliente_id, es_fiado, monto_efectivo, monto_transferencia })
+    .insert({ subtotal: subtotalTotal, descuento_total: descuentoTotal, total, medio_pago, registrado_por, cliente_id, es_fiado, monto_efectivo, monto_transferencia, created_at })
     .select().single();
   if (ventaError) { alert("No se pudo registrar la venta."); console.error(ventaError); return; }
  
@@ -2534,8 +2629,8 @@ async function confirmSale() {
  
   // Registrar el/los movimiento(s) en caja (solo si no es fiado; lo fiado entra cuando se cobra)
   if (!es_fiado) {
-    if (monto_efectivo > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "venta", monto: monto_efectivo, medio_pago: "efectivo", venta_id: venta.id, descripcion: `Venta #${venta.id}` });
-    if (monto_transferencia > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "venta", monto: monto_transferencia, medio_pago: "transferencia", venta_id: venta.id, descripcion: `Venta #${venta.id}` });
+    if (monto_efectivo > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "venta", monto: monto_efectivo, medio_pago: "efectivo", venta_id: venta.id, fecha: created_at, descripcion: `Venta #${venta.id}` });
+    if (monto_transferencia > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "venta", monto: monto_transferencia, medio_pago: "transferencia", venta_id: venta.id, fecha: created_at, descripcion: `Venta #${venta.id}` });
   }
   await registrarHistorial("ventas", venta.id, "crear", `Venta de ${fmt(total)} por ${registrado_por}${es_fiado ? " (fiado)" : ""}${cliente_id ? " a " + (clientes.find((c) => c.id === cliente_id)?.nombre || "cliente") : ""}`);
  
