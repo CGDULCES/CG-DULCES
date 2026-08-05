@@ -502,7 +502,7 @@ function renderDashboard(content) {
             <div class="flex items-center justify-between gap-3">
               <div class="min-w-0">
                 <p class="text-[13px] text-[#241C2E] truncate">${(v.venta_items||[]).map(it=>`${it.cantidad}× ${it.productos?.nombre||""}`).join(", ")}</p>
-                <p class="text-[11px] text-[#8a7d94]">${new Date(v.created_at).toLocaleTimeString("es-PY",{hour:"2-digit",minute:"2-digit"})} · ${v.registrado_por || ""}</p>
+                <p class="text-[11px] text-[#8a7d94]">${new Date(v.created_at).toLocaleTimeString("es-PY",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})} · ${v.registrado_por || ""}</p>
               </div>
               <span class="font-mono-num text-[13px] font-semibold shrink-0">${fmt(v.total)}</span>
             </div>`).join("")}
@@ -1247,7 +1247,7 @@ function renderClienteDetalle(content) {
         ventas.map((v) => {
           const pagado = pagadoDeVenta(v.id);
           const pendiente = v.es_fiado ? Math.max(0, v.total - pagado) : 0;
-          const fechaHora = new Date(v.created_at).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+          const fechaHora = new Date(v.created_at).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Asuncion" });
           const itemsTexto = (v.venta_items || []).map((it) => `${it.cantidad}× ${it.productos?.nombre || ""}`).join(", ");
           const seleccionable = v.es_fiado && pendiente > 0;
           return `
@@ -1283,7 +1283,7 @@ function renderClienteDetalle(content) {
       ${repartos.map((r) => {
         const pagado = pagadoDeReparto(r.venta_id);
         const pendiente = Math.max(0, r.monto - pagado);
-        const fechaHora = new Date(r.created_at).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+        const fechaHora = new Date(r.created_at).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Asuncion" });
         const itemsTexto = (r.ventas?.venta_items || []).map((it) => `${it.cantidad}× ${it.productos?.nombre || ""}`).join(", ");
         return `
         <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
@@ -1844,7 +1844,7 @@ function renderAuditoria(content) {
         <div class="bg-white rounded-2xl p-3.5 shadow-sm border border-black/[0.04]">
           <div class="flex items-center justify-between mb-1">
             <span class="text-[12px] font-semibold text-[#241C2E]">${ICONO_ACCION[h.accion] || "•"} ${NOMBRE_TABLA[h.tabla] || h.tabla}</span>
-            <span class="text-[10px] text-[#8a7d94]">${new Date(h.fecha).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+            <span class="text-[10px] text-[#8a7d94]">${new Date(h.fecha).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Asuncion" })}</span>
           </div>
           <p class="text-[13px] text-[#241C2E]">${h.detalle || ""}</p>
           <p class="text-[11px] text-[#8a7d94] mt-0.5">${h.usuario || ""}</p>
