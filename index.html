@@ -799,14 +799,19 @@ async function crearClienteDivCuenta() {
   renderDividirCuentaModal();
 }
  
+let procesandoAccion = false;
+ 
 async function confirmarDividirCuenta() {
+  if (procesandoAccion) return;
   const producto = productos.find((p) => p.id === window.__divCuentaProductoId);
   const cantidad = window.__divCuentaCantidad;
   const seleccion = [...window.__divCuentaSeleccion];
   if (!producto) return;
   if (cantidad > producto.stock) { alert(`No hay suficiente stock de "${producto.nombre}". Disponible: ${producto.stock}.`); return; }
   if (seleccion.length < 2) { alert("Elegí al menos 2 clientes para dividir la cuenta."); return; }
+  procesandoAccion = true;
  
+  try {
   const total = producto.precio_venta * cantidad;
   const registrado_por = usuarios[0]?.nombre || "";
   const created_at = new Date(window.__divCuentaFecha + "T12:00:00").toISOString();
@@ -833,6 +838,9 @@ async function confirmarDividirCuenta() {
   closeModal();
   activeTab = "dashboard";
   await loadAll();
+  } finally {
+    procesandoAccion = false;
+  }
 }
  
 let buscarVender = "";
@@ -1358,19 +1366,25 @@ function openCobroReparto(ventaId, pendiente) {
 }
  
 async function saveCobroVenta(ventaId) {
+  if (procesandoAccion) return;
   const monto = Number(document.getElementById("cobroventa-monto").value) || 0;
   if (monto <= 0) return;
   const medio_pago = document.getElementById("cobroventa-medio").value;
   const registrado_por = usuarios[0]?.nombre || "";
   const clienteId = window.__clienteDetalleId;
   const cliente = clientes.find((c) => c.id === clienteId);
-  const { data: cobro, error } = await sb.from("cobros").insert({ cliente_id: clienteId, venta_id: ventaId, monto, medio_pago, registrado_por }).select().single();
-  if (error) { alert("No se pudo registrar el cobro."); console.error(error); return; }
-  await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "cobro", monto, medio_pago, venta_id: ventaId, cobro_id: cobro.id, descripcion: `Cobro a ${cliente?.nombre || ""}` });
-  await registrarHistorial("cobros", ventaId, "crear", `Cobro de ${fmt(monto)} a ${cliente?.nombre || ""}`);
-  closeModal();
-  await loadAll();
-  await abrirClienteDetalle(clienteId);
+  procesandoAccion = true;
+  try {
+    const { data: cobro, error } = await sb.from("cobros").insert({ cliente_id: clienteId, venta_id: ventaId, monto, medio_pago, registrado_por }).select().single();
+    if (error) { alert("No se pudo registrar el cobro."); console.error(error); return; }
+    await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "cobro", monto, medio_pago, venta_id: ventaId, cobro_id: cobro.id, descripcion: `Cobro a ${cliente?.nombre || ""}` });
+    await registrarHistorial("cobros", ventaId, "crear", `Cobro de ${fmt(monto)} a ${cliente?.nombre || ""}`);
+    closeModal();
+    await loadAll();
+    await abrirClienteDetalle(clienteId);
+  } finally {
+    procesandoAccion = false;
+  }
 }
  
 function openCobroSeleccionadas() {
@@ -1388,6 +1402,9 @@ function openCobroSeleccionadas() {
 }
  
 async function saveCobroSeleccionadas() {
+  if (procesandoAccion) return;
+  procesandoAccion = true;
+  try {
   const medio_pago = document.getElementById("cobrosel-medio").value;
   const registrado_por = usuarios[0]?.nombre || "";
   const clienteId = window.__clienteDetalleId;
@@ -1408,6 +1425,9 @@ async function saveCobroSeleccionadas() {
   closeModal();
   await loadAll();
   await abrirClienteDetalle(clienteId);
+  } finally {
+    procesandoAccion = false;
+  }
 }
  
 function openEditCliente(id) {
@@ -2044,6 +2064,7 @@ async function aplicarConsumoIlimitado(producto, cantidadNecesaria) {
 }
  
 async function saveNewCompra() {
+  if (procesandoAccion) return;
   const proveedor_id = Number(document.getElementById("compra-proveedor").value) || null;
   const tipo = document.getElementById("compra-tipo").value;
   const fecha = document.getElementById("compra-fecha").value;
@@ -2078,6 +2099,9 @@ async function saveNewCompra() {
     return;
   }
  
+  procesandoAccion = true;
+  try {
+ 
   const { data: compra, error } = await sb
     .from("compras")
     .insert({ proveedor_id, tipo, total, descuento, registrado_por, medio_pago, monto_efectivo, monto_transferencia, created_at })
@@ -2105,6 +2129,9 @@ async function saveNewCompra() {
   await loadAll();
   activeTab = "compras";
   render();
+  } finally {
+    procesandoAccion = false;
+  }
 }
  
 async function saveEditCompra() {
@@ -2435,7 +2462,7 @@ function renderConfirmSaleModal() {
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Registrado por</label>
     <select id="registrado-por" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none">${opciones}</select>
  
-    <button onclick="confirmSale()" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Registrar venta</button>
+    <button id="btn-confirmar-venta" onclick="confirmSale()" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Registrar venta</button>
   `);
   window.__clienteRecienCreado = null;
 }
@@ -2483,7 +2510,10 @@ function actualizarRestoMixto() {
     resto === 0 ? "✓ Cubre el total exacto" : resto > 0 ? `Falta cubrir ${fmt(resto)}` : `Te pasaste por ${fmt(-resto)}`;
 }
  
+let procesandoVenta = false;
+ 
 async function confirmSale() {
+  if (procesandoVenta) return; // evita registrar la misma venta dos veces si se toca el botón rápido
   const items = Object.entries(cart).filter(([, q]) => q > 0);
   if (items.length === 0 && heladoCart.length === 0) return;
   if (!cajaRequerida()) return;
@@ -2496,6 +2526,12 @@ async function confirmSale() {
   const medio_pago = es_fiado ? "fiado" : (window.__medioPago || "efectivo");
   const fechaVenta = document.getElementById("venta-fecha").value;
   const created_at = new Date(fechaVenta + "T12:00:00").toISOString();
+ 
+  procesandoVenta = true;
+  const btnConfirmar = document.getElementById("btn-confirmar-venta");
+  if (btnConfirmar) { btnConfirmar.disabled = true; btnConfirmar.textContent = "Registrando..."; btnConfirmar.classList.add("opacity-60"); }
+ 
+  try {
  
   let monto_efectivo = 0, monto_transferencia = 0;
  
@@ -2639,6 +2675,11 @@ async function confirmSale() {
   closeModal();
   activeTab = "dashboard";
   await loadAll();
+ 
+  } finally {
+    procesandoVenta = false;
+    if (btnConfirmar) { btnConfirmar.disabled = false; btnConfirmar.textContent = "Registrar venta"; btnConfirmar.classList.remove("opacity-60"); }
+  }
 }
  
 // ---------- Edición / alta de productos ----------
