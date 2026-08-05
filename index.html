@@ -424,7 +424,7 @@ function sectionLabel(text) {
 // ---------- Render principal ----------
 function render() {
   const content = document.getElementById("content");
-  const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes", "auditoria": "", "masopciones": "", "reportes": "", "promociones": "", "configuracion": "" };
+  const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes", "auditoria": "", "masopciones": "", "reportes": "", "promociones": "", "configuracion": "", "todas-ventas": "dashboard" };
   const grupoActivo = mapaGrupo[activeTab] || activeTab;
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === grupoActivo));
   document.getElementById("add-product-fab").classList.toggle("screen-hidden", activeTab !== "inventario");
@@ -438,6 +438,7 @@ function render() {
   if (activeTab === "cliente-detalle") renderClienteDetalle(content);
   if (activeTab === "compras") renderCompras(content);
   if (activeTab === "auditoria") renderAuditoria(content);
+  if (activeTab === "todas-ventas") renderTodasVentas(content);
   if (activeTab === "masopciones") renderMasOpciones(content);
   if (activeTab === "reportes") renderReportes(content);
   if (activeTab === "promociones") renderPromociones(content);
@@ -507,6 +508,7 @@ function renderDashboard(content) {
               <span class="font-mono-num text-[13px] font-semibold shrink-0">${fmt(v.total)}</span>
             </div>`).join("")}
         </div>
+        <button onclick="abrirTodasVentas()" class="w-full text-center text-[12px] text-[#6B2D5C] font-semibold mt-3 pt-3 border-t border-black/[0.06]">Ver todas las ventas ›</button>
       </div>
     </div>
   `;
@@ -814,7 +816,7 @@ async function confirmarDividirCuenta() {
   try {
   const total = producto.precio_venta * cantidad;
   const registrado_por = usuarios[0]?.nombre || "";
-  const created_at = new Date(window.__divCuentaFecha + "T12:00:00").toISOString();
+  const created_at = fechaOAhora(window.__divCuentaFecha);
  
   // Un solo registro de venta (para el stock), a nombre del primer cliente elegido
   const { data: venta, error } = await sb
@@ -1209,6 +1211,159 @@ async function deleteRepartoCompartido(ventaId) {
   await deleteVentaSinConfirmar(ventaId);
 }
  
+// ---------- Editar una venta simple ----------
+window.__editVentaId = null;
+window.__editVentaItems = [];
+window.__editVentaOriginalItems = [];
+ 
+async function openEditVenta(ventaId) {
+  const { data: venta } = await sb
+    .from("ventas")
+    .select("id, cliente_id, es_fiado, medio_pago, monto_efectivo, monto_transferencia, created_at, venta_items(id, producto_id, cantidad, precio_unitario, costo_unitario, descuento, productos(nombre))")
+    .eq("id", ventaId).single();
+  if (!venta) return;
+ 
+  const tieneHelado = (venta.venta_items || []).some((it) => PRODUCTOS_HELADO_SIN_STOCK_DIRECTO.includes(it.productos?.nombre));
+  if (tieneHelado) {
+    alert("Esta venta incluye un Helado armado y no se puede editar de forma segura. Si necesitás corregirla, eliminala y cargala de nuevo.");
+    return;
+  }
+ 
+  window.__editVentaId = ventaId;
+  window.__editVentaClienteId = venta.cliente_id;
+  window.__editVentaFecha = new Date(venta.created_at).toISOString().slice(0, 10);
+  window.__editVentaItems = (venta.venta_items || []).map((it) => ({ id: it.id, producto_id: it.producto_id, cantidad: it.cantidad, precio_unitario: it.precio_unitario, costo_unitario: it.costo_unitario, descuento: it.descuento || 0 }));
+  window.__editVentaOriginalItems = JSON.parse(JSON.stringify(window.__editVentaItems));
+  renderEditVentaModal();
+}
+ 
+function renderEditVentaModal() {
+  const opcionesCliente = clientes.map((c) => `<option value="${c.id}" ${c.id===window.__editVentaClienteId?"selected":""}>${c.nombre}</option>`).join("");
+  const productosVender = ventasVisibles();
+  const total = window.__editVentaItems.reduce((s, it) => s + it.cantidad * it.precio_unitario - it.descuento, 0);
+ 
+  const filasHtml = window.__editVentaItems.map((it, i) => `
+    <div class="bg-[#F7F3FA] rounded-xl p-3 mb-2">
+      <select onchange="cambiarItemEditVenta(${i}, 'producto_id', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] mb-2 outline-none">
+        ${productosVender.map((p) => `<option value="${p.id}" ${p.id===it.producto_id?"selected":""}>${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</option>`).join("")}
+      </select>
+      <div class="grid grid-cols-2 gap-2">
+        <div>
+          <label class="text-[10px] text-[#8a7d94]">Cantidad</label>
+          <input type="number" value="${it.cantidad}" onchange="cambiarItemEditVenta(${i}, 'cantidad', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] outline-none" />
+        </div>
+        <div>
+          <label class="text-[10px] text-[#8a7d94]">Precio c/u</label>
+          <input type="number" value="${it.precio_unitario}" onchange="cambiarItemEditVenta(${i}, 'precio_unitario', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] outline-none" />
+        </div>
+      </div>
+      ${window.__editVentaItems.length > 1 ? `<button onclick="quitarItemEditVenta(${i})" class="text-[11px] text-[#D64545] mt-2">Quitar</button>` : ""}
+    </div>
+  `).join("");
+ 
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Editar venta</p>
+ 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Fecha</label>
+    <input id="editventa-fecha" type="date" value="${window.__editVentaFecha}" onchange="window.__editVentaFecha = this.value" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+ 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cliente</label>
+    <select id="editventa-cliente" onchange="window.__editVentaClienteId = Number(this.value)" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">${opcionesCliente}</select>
+ 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Productos</label>
+    <div class="mt-2 mb-2">${filasHtml}</div>
+    <button onclick="agregarItemEditVenta()" class="text-[12px] text-[#6B2D5C] font-semibold mb-4">+ Agregar otro producto</button>
+ 
+    <div class="flex items-center justify-between mb-4">
+      <span class="text-[12px] text-[#8a7d94]">Total</span>
+      <span class="font-mono-num text-[18px] font-semibold text-[#241C2E]">${fmt(total)}</span>
+    </div>
+ 
+    <button onclick="saveEditVenta()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Guardar cambios</button>
+  `);
+}
+ 
+function cambiarItemEditVenta(i, campo, valor) {
+  window.__editVentaItems[i][campo] = Number(valor);
+  renderEditVentaModal();
+}
+function agregarItemEditVenta() {
+  const primero = ventasVisibles()[0];
+  window.__editVentaItems.push({ producto_id: primero?.id, cantidad: 1, precio_unitario: primero?.precio_venta || 0, costo_unitario: primero?.costo_ultimo || 0, descuento: 0 });
+  renderEditVentaModal();
+}
+function quitarItemEditVenta(i) {
+  window.__editVentaItems.splice(i, 1);
+  renderEditVentaModal();
+}
+ 
+async function saveEditVenta() {
+  const ventaId = window.__editVentaId;
+  const cliente_id = window.__editVentaClienteId;
+  const created_at = new Date(window.__editVentaFecha + "T12:00:00").toISOString();
+ 
+  // Validar antes de escribir nada: que ningún ajuste deje el stock en negativo
+  for (const it of window.__editVentaItems) {
+    const original = window.__editVentaOriginalItems.find((o) => o.id === it.id);
+    const delta = it.cantidad - (original?.cantidad || 0); // + = se vende más, resta más stock
+    const p = productos.find((pr) => pr.id === it.producto_id);
+    if (p && p.stock - delta < 0) {
+      alert(`Ese cambio dejaría el stock de "${p.nombre}" en negativo.`);
+      return;
+    }
+  }
+ 
+  // Aplicar cambios de stock
+  for (const it of window.__editVentaItems) {
+    if (it.id) {
+      const original = window.__editVentaOriginalItems.find((o) => o.id === it.id);
+      const delta = it.cantidad - (original?.cantidad || 0);
+      const p = productos.find((pr) => pr.id === it.producto_id);
+      if (p) await sb.from("productos").update({ stock: p.stock - delta }).eq("id", p.id);
+      const subtotal = it.cantidad * it.precio_unitario - it.descuento;
+      await sb.from("venta_items").update({ producto_id: it.producto_id, cantidad: it.cantidad, precio_unitario: it.precio_unitario, subtotal }).eq("id", it.id);
+    } else {
+      const p = productos.find((pr) => pr.id === it.producto_id);
+      if (p) await sb.from("productos").update({ stock: p.stock - it.cantidad }).eq("id", p.id);
+      const subtotal = it.cantidad * it.precio_unitario - it.descuento;
+      await sb.from("venta_items").insert({ venta_id: ventaId, producto_id: it.producto_id, cantidad: it.cantidad, precio_unitario: it.precio_unitario, costo_unitario: it.costo_unitario, descuento: it.descuento, subtotal });
+    }
+  }
+  for (const original of window.__editVentaOriginalItems) {
+    const sigueExistiendo = window.__editVentaItems.some((it) => it.id === original.id);
+    if (!sigueExistiendo) {
+      const p = productos.find((pr) => pr.id === original.producto_id);
+      if (p) await sb.from("productos").update({ stock: p.stock + original.cantidad }).eq("id", p.id);
+      await sb.from("venta_items").delete().eq("id", original.id);
+    }
+  }
+ 
+  const subtotalTotal = window.__editVentaItems.reduce((s, it) => s + it.cantidad * it.precio_unitario, 0);
+  const descuentoTotal = window.__editVentaItems.reduce((s, it) => s + it.descuento, 0);
+  const total = subtotalTotal - descuentoTotal;
+ 
+  await sb.from("ventas").update({ cliente_id, subtotal: subtotalTotal, descuento_total: descuentoTotal, total, created_at }).eq("id", ventaId);
+ 
+  // Si no era fiada, ajustar el movimiento de caja al nuevo total (mismo reparto efectivo/transferencia que tenía)
+  const { data: ventaActual } = await sb.from("ventas").select("es_fiado, monto_efectivo, monto_transferencia").eq("id", ventaId).single();
+  if (ventaActual && !ventaActual.es_fiado) {
+    const totalAnterior = Number(ventaActual.monto_efectivo || 0) + Number(ventaActual.monto_transferencia || 0);
+    const ratioEfectivo = totalAnterior > 0 ? Number(ventaActual.monto_efectivo || 0) / totalAnterior : 1;
+    const nuevoEfectivo = Math.round(total * ratioEfectivo);
+    const nuevaTransferencia = total - nuevoEfectivo;
+    await sb.from("caja_movimientos").delete().eq("venta_id", ventaId).is("cobro_id", null);
+    if (nuevoEfectivo > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual?.id, tipo: "venta", monto: nuevoEfectivo, medio_pago: "efectivo", venta_id: ventaId, fecha: created_at, descripcion: `Venta #${ventaId} (editada)` });
+    if (nuevaTransferencia > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual?.id, tipo: "venta", monto: nuevaTransferencia, medio_pago: "transferencia", venta_id: ventaId, fecha: created_at, descripcion: `Venta #${ventaId} (editada)` });
+    await sb.from("ventas").update({ monto_efectivo: nuevoEfectivo, monto_transferencia: nuevaTransferencia }).eq("id", ventaId);
+  }
+ 
+  await registrarHistorial("ventas", ventaId, "editar", `Venta editada, nuevo total ${fmt(total)}`);
+  closeModal();
+  await loadAll();
+  if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
+  else if (activeTab === "todas-ventas") await abrirTodasVentas();
+}
+ 
 function pagadoDeVenta(ventaId) {
   return window.__clienteDetalleCobros.filter((c) => c.venta_id === ventaId).reduce((s, c) => s + Number(c.monto), 0);
 }
@@ -1268,6 +1423,7 @@ function renderClienteDetalle(content) {
                       : `<span class="text-[11px] text-[#D64545] font-semibold">Pendiente ${fmt(pendiente)}</span>`}
                   <div class="flex items-center gap-3">
                     ${seleccionable ? `<button onclick="openCobroVenta(${v.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Cobrar esta</button>` : ""}
+                    <button onclick="openEditVenta(${v.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar</button>
                     <button onclick="deleteVenta(${v.id})" class="text-[11px] text-[#D64545] font-semibold">Eliminar</button>
                   </div>
                 </div>
@@ -1827,6 +1983,74 @@ async function guardarConfiguracion() {
   alert("Guardado.");
 }
  
+// ---------- Todas las ventas ----------
+window.__todasVentas = [];
+let buscarTodasVentas = "";
+ 
+async function abrirTodasVentas() {
+  const { data } = await sb
+    .from("ventas")
+    .select("id, total, es_fiado, medio_pago, registrado_por, created_at, clientes(nombre), venta_items(cantidad, productos(nombre))")
+    .order("created_at", { ascending: false })
+    .limit(500);
+  window.__todasVentas = data || [];
+  buscarTodasVentas = "";
+  activeTab = "todas-ventas";
+  render();
+}
+ 
+function cambiarBuscarTodasVentas(valor) {
+  buscarTodasVentas = valor;
+  render();
+  refocusInput("buscar-todasventas-input");
+}
+ 
+function renderTodasVentas(content) {
+  const termino = buscarTodasVentas.trim().toLowerCase();
+  const filtradas = window.__todasVentas.filter((v) => {
+    if (!termino) return true;
+    const clienteNombre = v.clientes?.nombre?.toLowerCase() || "";
+    const itemsTexto = (v.venta_items || []).map((it) => it.productos?.nombre?.toLowerCase() || "").join(" ");
+    return clienteNombre.includes(termino) || itemsTexto.includes(termino);
+  });
+ 
+  content.innerHTML = `
+    <button onclick="irA('dashboard')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver al Dashboard</button>
+    ${sectionLabel(`Todas las ventas (${filtradas.length})`)}
+    <div class="relative mb-4">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8a7d94" stroke-width="2" stroke-linecap="round" class="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="buscar-todasventas-input" type="text" placeholder="Buscar por cliente o producto..." value="${buscarTodasVentas}" oninput="cambiarBuscarTodasVentas(this.value)" class="w-full bg-white border border-black/[0.06] rounded-xl pl-9 pr-3 py-2.5 text-[13px] outline-none" />
+    </div>
+    <div class="space-y-2">
+      ${filtradas.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">No encontré ventas con ese criterio.</p>` :
+        filtradas.map((v) => {
+          const fechaHora = new Date(v.created_at).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Asuncion" });
+          const itemsTexto = (v.venta_items || []).map((it) => `${it.cantidad}× ${it.productos?.nombre || ""}`).join(", ");
+          return `
+          <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-[11px] text-[#8a7d94]">${fechaHora}${v.clientes?.nombre ? " · " + v.clientes.nombre : ""}</span>
+              <span class="font-mono-num text-[13px] font-semibold">${fmt(v.total)}</span>
+            </div>
+            <p class="text-[13px] text-[#241C2E]">${itemsTexto}</p>
+            <div class="flex items-center justify-between mt-1.5">
+              <span class="text-[11px] text-[#8a7d94]">${v.es_fiado ? "Fiado" : v.medio_pago} · ${v.registrado_por || ""}</span>
+              <div class="flex items-center gap-3">
+                <button onclick="openEditVenta(${v.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar</button>
+                <button onclick="deleteVentaDesdeTodas(${v.id})" class="text-[11px] text-[#D64545] font-semibold">Eliminar</button>
+              </div>
+            </div>
+          </div>`;
+        }).join("")}
+    </div>
+  `;
+}
+ 
+async function deleteVentaDesdeTodas(ventaId) {
+  await deleteVenta(ventaId);
+  await abrirTodasVentas();
+}
+ 
 // ---------- Auditoría ----------
 const ICONO_ACCION = { crear: "🟢", editar: "🟡", eliminar: "🔴" };
 const NOMBRE_TABLA = {
@@ -2068,7 +2292,7 @@ async function saveNewCompra() {
   const proveedor_id = Number(document.getElementById("compra-proveedor").value) || null;
   const tipo = document.getElementById("compra-tipo").value;
   const fecha = document.getElementById("compra-fecha").value;
-  const created_at = new Date(fecha + "T12:00:00").toISOString();
+  const created_at = fechaOAhora(fecha);
   const registrado_por = usuarios[0]?.nombre || "";
   const descuento = window.__compraDescuento || 0;
   const subtotal = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
@@ -2138,7 +2362,7 @@ async function saveEditCompra() {
   const proveedor_id = Number(document.getElementById("compra-proveedor").value) || null;
   const tipo = document.getElementById("compra-tipo").value;
   const fecha = document.getElementById("compra-fecha").value;
-  const created_at = new Date(fecha + "T12:00:00").toISOString();
+  const created_at = fechaOAhora(fecha);
   const descuento = window.__compraDescuento || 0;
   const subtotal = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
   const total = Math.max(0, subtotal - descuento);
@@ -2402,18 +2626,27 @@ function openConfirmSale() {
   const total = totalNormal + totalHelados;
   window.__ventaTotal = total;
   window.__ventaFecha = new Date().toISOString().slice(0, 10);
+  window.__ventaDescuentoManual = 0;
   renderConfirmSaleModal();
   window.__medioPago = "efectivo";
 }
  
 function renderConfirmSaleModal() {
   const total = window.__ventaTotal;
+  const descuentoManual = window.__ventaDescuentoManual || 0;
+  const totalFinal = Math.max(0, total - descuentoManual);
   const opciones = usuarios.map((u) => `<option value="${u.nombre}">${u.nombre}</option>`).join("");
   const opcionesCliente = clientes.map((c) => `<option value="${c.id}" ${window.__clienteRecienCreado===c.id?"selected":""}>${c.nombre}</option>`).join("");
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Confirmar venta</p>
-    <p class="text-[13px] text-[#8a7d94] mb-1">Total</p>
-    <p class="font-mono-num text-[22px] font-semibold text-[#241C2E] mb-4">${fmt(total)}</p>
+    <p class="text-[13px] text-[#8a7d94] mb-1">Subtotal</p>
+    <p class="font-mono-num text-[16px] text-[#8a7d94] mb-3">${fmt(total)}</p>
+ 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Descuento manual (opcional)</label>
+    <input id="venta-descuento" type="number" value="${descuentoManual}" onchange="window.__ventaDescuentoManual = Number(this.value) || 0; renderConfirmSaleModal();" placeholder="Ej: negociaste un precio especial" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+ 
+    <p class="text-[13px] text-[#8a7d94] mb-1">Total a cobrar</p>
+    <p class="font-mono-num text-[22px] font-semibold text-[#241C2E] mb-4">${fmt(totalFinal)}</p>
  
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Fecha de la venta</label>
     <input id="venta-fecha" type="date" value="${window.__ventaFecha}" onchange="window.__ventaFecha = this.value" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none" />
@@ -2510,6 +2743,13 @@ function actualizarRestoMixto() {
     resto === 0 ? "✓ Cubre el total exacto" : resto > 0 ? `Falta cubrir ${fmt(resto)}` : `Te pasaste por ${fmt(-resto)}`;
 }
  
+// Si la fecha elegida es hoy, usa la hora real actual. Si es un día anterior (carga tardía), usa el mediodía de ese día.
+function fechaOAhora(fechaSeleccionada) {
+  const hoy = new Date().toISOString().slice(0, 10);
+  if (fechaSeleccionada === hoy) return new Date().toISOString();
+  return new Date(fechaSeleccionada + "T12:00:00").toISOString();
+}
+ 
 let procesandoVenta = false;
  
 async function confirmSale() {
@@ -2525,7 +2765,7 @@ async function confirmSale() {
   if (!cliente_id) { alert("Elegí un cliente (o creá uno rápido) para poder registrar la venta."); return; }
   const medio_pago = es_fiado ? "fiado" : (window.__medioPago || "efectivo");
   const fechaVenta = document.getElementById("venta-fecha").value;
-  const created_at = new Date(fechaVenta + "T12:00:00").toISOString();
+  const created_at = fechaOAhora(fechaVenta);
  
   procesandoVenta = true;
   const btnConfirmar = document.getElementById("btn-confirmar-venta");
@@ -2593,6 +2833,18 @@ async function confirmSale() {
     subtotalTotal += h.total;
     lineas.push({ producto_id: producto.id, cantidad, precio_unitario: producto.precio_venta, costo_unitario: producto.costo_ultimo, descuento: 0, subtotal: h.total });
   });
+ 
+  // Descuento manual: se reparte proporcionalmente entre todas las líneas de la venta
+  const descuentoManual = Math.min(window.__ventaDescuentoManual || 0, subtotalTotal - descuentoTotal);
+  if (descuentoManual > 0) {
+    const baseParaReparto = subtotalTotal - descuentoTotal;
+    lineas.forEach((l) => {
+      const parte = baseParaReparto > 0 ? (l.subtotal / baseParaReparto) * descuentoManual : 0;
+      l.descuento += parte;
+      l.subtotal -= parte;
+    });
+    descuentoTotal += descuentoManual;
+  }
  
   const total = subtotalTotal - descuentoTotal;
  
