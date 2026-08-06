@@ -1453,6 +1453,7 @@ function renderClienteDetalle(content) {
               ? `<span class="text-[11px] text-[#2F9E7A] font-semibold">✓ Pagado</span>`
               : `<span class="text-[11px] text-[#D64545] font-semibold">Pendiente ${fmt(pendiente)}</span>`}
             <div class="flex items-center gap-3">
+              <button onclick="openEditFechaReparto(${r.venta_id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar fecha</button>
               ${pendiente > 0 ? `<button onclick="openCobroReparto(${r.venta_id}, ${pendiente})" class="text-[11px] text-[#6B2D5C] font-semibold">Cobrar esta</button>` : ""}
               <button onclick="deleteRepartoCompartido(${r.venta_id})" class="text-[11px] text-[#D64545] font-semibold">Eliminar</button>
             </div>
@@ -1502,6 +1503,27 @@ function openCobroVenta(ventaId) {
     </select>
     <button onclick="saveCobroVenta(${ventaId})" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Registrar cobro</button>
   `);
+}
+ 
+function openEditFechaReparto(ventaId) {
+  const reparto = window.__clienteDetalleRepartos.find((r) => r.venta_id === ventaId);
+  const fechaActual = reparto?.ventas?.created_at ? new Date(reparto.ventas.created_at).toISOString().slice(0, 10) : fechaLocalHoy();
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Editar fecha de esta cuenta compartida</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Fecha</label>
+    <input id="editreparto-fecha" type="date" value="${fechaActual}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
+    <button onclick="saveEditFechaReparto(${ventaId})" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Guardar</button>
+  `);
+}
+ 
+async function saveEditFechaReparto(ventaId) {
+  const fecha = document.getElementById("editreparto-fecha").value;
+  const created_at = fechaOAhora(fecha);
+  await sb.from("ventas").update({ created_at }).eq("id", ventaId);
+  await registrarHistorial("ventas", ventaId, "editar", `Fecha de cuenta compartida corregida`);
+  closeModal();
+  await loadAll();
+  if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
 }
  
 function openCobroReparto(ventaId, pendiente) {
