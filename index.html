@@ -1454,6 +1454,7 @@ function renderClienteDetalle(content) {
               : `<span class="text-[11px] text-[#D64545] font-semibold">Pendiente ${fmt(pendiente)}</span>`}
             <div class="flex items-center gap-3">
               <button onclick="openEditFechaReparto(${r.venta_id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar fecha</button>
+              <button onclick="openEditReparto(${r.venta_id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar división</button>
               ${pendiente > 0 ? `<button onclick="openCobroReparto(${r.venta_id}, ${pendiente})" class="text-[11px] text-[#6B2D5C] font-semibold">Cobrar esta</button>` : ""}
               <button onclick="deleteRepartoCompartido(${r.venta_id})" class="text-[11px] text-[#D64545] font-semibold">Eliminar</button>
             </div>
@@ -1524,6 +1525,125 @@ async function saveEditFechaReparto(ventaId) {
   closeModal();
   await loadAll();
   if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
+}
+ 
+// ---------- Editar la división de una cuenta compartida ----------
+window.__editRepartoVentaId = null;
+window.__editRepartoSeleccion = new Set();
+window.__editRepartoOriginal = [];
+ 
+async function openEditReparto(ventaId) {
+  const { data: repartos } = await sb.from("venta_repartos").select("id, cliente_id, monto, clientes(nombre)").eq("venta_id", ventaId);
+  window.__editRepartoVentaId = ventaId;
+  window.__editRepartoOriginal = repartos || [];
+  window.__editRepartoSeleccion = new Set((repartos || []).map((r) => r.cliente_id));
+  renderEditRepartoModal();
+}
+ 
+function renderEditRepartoModal() {
+  const original = window.__editRepartoOriginal;
+  const total = original.reduce((s, r) => s + Number(r.monto), 0); // el total de la cuenta no cambia, solo cómo se reparte
+  const seleccion = [...window.__editRepartoSeleccion];
+  const porPersona = seleccion.length > 0 ? total / seleccion.length : 0;
+ 
+  // Cobros ya hechos por cada persona (para no perderlos de vista al recalcular)
+  const pagadoPorCliente = {};
+  original.forEach((r) => {
+    pagadoPorCliente[r.cliente_id] = cobros.filter((c) => c.venta_id === window.__editRepartoVentaId && c.cliente_id === r.cliente_id).reduce((s, c) => s + Number(c.monto), 0);
+  });
+ 
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Editar división</p>
+    <p class="text-[12px] text-[#8a7d94] mb-4">Total de la cuenta: ${fmt(total)} · se reparte en partes iguales entre quienes tildes</p>
+ 
+    <div class="space-y-1.5 mb-4 max-h-[220px] overflow-y-auto">
+      ${clientes.map((c) => {
+        const yaPago = pagadoPorCliente[c.id] > 0;
+        return `
+        <label class="flex items-center gap-2 bg-[#F7F3FA] rounded-lg px-3 py-2">
+          <input type="checkbox" onchange="toggleClienteEditReparto(${c.id}, this.checked)" ${window.__editRepartoSeleccion.has(c.id)?"checked":""} class="w-4 h-4" />
+          <span class="text-[13px] text-[#241C2E] flex-1">${c.nombre}${yaPago ? ` <span class="text-[10px] text-[#2F9E7A]">(ya pagó ${fmt(pagadoPorCliente[c.id])})</span>` : ""}</span>
+        </label>`;
+      }).join("")}
+    </div>
+    <div class="flex gap-2 mb-4">
+      <input id="editreparto-nuevo-cliente" type="text" placeholder="Nombre de cliente nuevo" class="flex-1 bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] outline-none" />
+      <button type="button" onclick="crearClienteEditReparto()" class="bg-[#6B2D5C] text-white text-[13px] font-semibold px-3.5 rounded-xl">+</button>
+    </div>
+ 
+    <div class="bg-[#F7F3FA] rounded-xl p-3 mb-5">
+      <div class="flex items-center justify-between text-[13px]">
+        <span class="text-[#8a7d94]">Entre ${seleccion.length} persona(s)</span>
+        <span class="font-mono-num font-semibold text-[#6B2D5C]">${fmt(porPersona)} c/u</span>
+      </div>
+    </div>
+ 
+    <button onclick="saveEditReparto()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Guardar nueva división</button>
+  `);
+}
+ 
+function toggleClienteEditReparto(id, checked) {
+  if (checked) window.__editRepartoSeleccion.add(id);
+  else window.__editRepartoSeleccion.delete(id);
+  renderEditRepartoModal();
+}
+ 
+async function crearClienteEditReparto() {
+  const nombre = document.getElementById("editreparto-nuevo-cliente").value.trim();
+  if (!nombre) return;
+  const { data, error } = await sb.from("clientes").insert({ nombre }).select().single();
+  if (error) { alert("No se pudo crear el cliente."); console.error(error); return; }
+  await registrarHistorial("clientes", data.id, "crear", `Cliente creado: ${nombre}`);
+  clientes.push(data);
+  window.__editRepartoSeleccion.add(data.id);
+  renderEditRepartoModal();
+}
+ 
+async function saveEditReparto() {
+  const ventaId = window.__editRepartoVentaId;
+  const original = window.__editRepartoOriginal;
+  const seleccion = [...window.__editRepartoSeleccion];
+  if (seleccion.length < 2) { alert("Tiene que haber al menos 2 personas en una cuenta dividida."); return; }
+ 
+  const total = original.reduce((s, r) => s + Number(r.monto), 0);
+  const porPersonaBase = Math.floor(total / seleccion.length);
+  const resto = total - porPersonaBase * seleccion.length;
+ 
+  // Bloquear si se intenta sacar a alguien que ya pagó su parte (para no perder plata de vista)
+  for (const r of original) {
+    const yaNoEsta = !seleccion.includes(r.cliente_id);
+    if (yaNoEsta) {
+      const pagado = cobros.filter((c) => c.venta_id === ventaId && c.cliente_id === r.cliente_id).reduce((s, c) => s + Number(c.monto), 0);
+      if (pagado > 0) {
+        alert(`No podés sacar a ${r.clientes?.nombre || "esa persona"} porque ya pagó ${fmt(pagado)} de su parte. Si fue un error, primero avisame para ver cómo revertirlo.`);
+        return;
+      }
+    }
+  }
+ 
+  // Actualizar / crear / borrar filas de reparto según quién quedó
+  for (let i = 0; i < seleccion.length; i++) {
+    const clienteId = seleccion[i];
+    const monto = porPersonaBase + (i === 0 ? resto : 0);
+    const existente = original.find((r) => r.cliente_id === clienteId);
+    if (existente) {
+      await sb.from("venta_repartos").update({ monto }).eq("id", existente.id);
+    } else {
+      await sb.from("venta_repartos").insert({ venta_id: ventaId, cliente_id: clienteId, monto });
+    }
+  }
+  for (const r of original) {
+    if (!seleccion.includes(r.cliente_id)) {
+      await sb.from("venta_repartos").delete().eq("id", r.id);
+    }
+  }
+ 
+  const nombres = seleccion.map((id) => clientes.find((c) => c.id === id)?.nombre).join(", ");
+  await registrarHistorial("ventas", ventaId, "editar", `División de cuenta compartida actualizada: ahora entre ${nombres}`);
+  closeModal();
+  await loadAll();
+  if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
+  else if (activeTab === "todas-ventas") await abrirTodasVentas();
 }
  
 function openCobroReparto(ventaId, pendiente) {
@@ -2012,7 +2132,7 @@ let buscarTodasVentas = "";
 async function abrirTodasVentas() {
   const { data } = await sb
     .from("ventas")
-    .select("id, total, es_fiado, medio_pago, registrado_por, created_at, clientes(nombre), venta_items(cantidad, productos(nombre))")
+    .select("id, total, es_fiado, medio_pago, registrado_por, created_at, clientes(nombre), venta_items(cantidad, productos(nombre)), venta_repartos(id, cliente_id, monto, clientes(nombre))")
     .order("created_at", { ascending: false })
     .limit(500);
   window.__todasVentas = data || [];
@@ -2032,8 +2152,9 @@ function renderTodasVentas(content) {
   const filtradas = window.__todasVentas.filter((v) => {
     if (!termino) return true;
     const clienteNombre = v.clientes?.nombre?.toLowerCase() || "";
+    const participantesTexto = (v.venta_repartos || []).map((r) => r.clientes?.nombre?.toLowerCase() || "").join(" ");
     const itemsTexto = (v.venta_items || []).map((it) => it.productos?.nombre?.toLowerCase() || "").join(" ");
-    return clienteNombre.includes(termino) || itemsTexto.includes(termino);
+    return clienteNombre.includes(termino) || participantesTexto.includes(termino) || itemsTexto.includes(termino);
   });
  
   content.innerHTML = `
@@ -2048,6 +2169,8 @@ function renderTodasVentas(content) {
         filtradas.map((v) => {
           const fechaHora = new Date(v.created_at).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Asuncion" });
           const itemsTexto = (v.venta_items || []).map((it) => `${it.cantidad}× ${it.productos?.nombre || ""}`).join(", ");
+          const esDividida = (v.venta_repartos || []).length > 0;
+          const participantes = esDividida ? v.venta_repartos.map((r) => r.clientes?.nombre || "").join(", ") : "";
           return `
           <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
             <div class="flex items-center justify-between mb-1">
@@ -2055,10 +2178,13 @@ function renderTodasVentas(content) {
               <span class="font-mono-num text-[13px] font-semibold">${fmt(v.total)}</span>
             </div>
             <p class="text-[13px] text-[#241C2E]">${itemsTexto}</p>
+            ${esDividida ? `<p class="text-[11px] text-[#6B2D5C] mt-1">👥 Dividida entre: ${participantes}</p>` : ""}
             <div class="flex items-center justify-between mt-1.5">
               <span class="text-[11px] text-[#8a7d94]">${v.es_fiado ? "Fiado" : v.medio_pago} · ${v.registrado_por || ""}</span>
               <div class="flex items-center gap-3">
-                <button onclick="openEditVenta(${v.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar</button>
+                ${esDividida
+                  ? `<button onclick="openEditReparto(${v.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar división</button>`
+                  : `<button onclick="openEditVenta(${v.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar</button>`}
                 <button onclick="deleteVentaDesdeTodas(${v.id})" class="text-[11px] text-[#D64545] font-semibold">Eliminar</button>
               </div>
             </div>
