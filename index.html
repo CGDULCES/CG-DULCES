@@ -2204,76 +2204,102 @@ async function deleteVentaDesdeTodas(ventaId) {
 }
  
 // ---------- Detalle de caja (auditoría del saldo) ----------
-function renderDetalleCaja(content) {
-  if (!cajaActual) {
+async function renderDetalleCaja(content) {
+  content.innerHTML = `
+    <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Detalle de caja · Historial completo")}
+    <p class="text-[13px] text-[#8a7d94]">Cargando todo el historial desde la primera caja...</p>
+  `;
+ 
+  // Traer TODAS las cajas que existieron alguna vez, en orden, con sus movimientos
+  const { data: todasLasCajas } = await sb.from("caja").select("*").order("fecha_apertura", { ascending: true });
+  const { data: todosLosMovs } = await sb.from("caja_movimientos").select("*").order("fecha", { ascending: true });
+ 
+  if (!todasLasCajas || todasLasCajas.length === 0) {
     content.innerHTML = `
       <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
       ${sectionLabel("Detalle de caja")}
-      <p class="text-[13px] text-[#8a7d94]">No hay ninguna caja abierta ahora mismo.</p>
+      <p class="text-[13px] text-[#8a7d94]">Todavía no se abrió ninguna caja.</p>
     `;
     return;
   }
  
-  // Recalculamos todo desde cero, movimiento por movimiento, para poder comparar contra lo que se ve en Caja
-  const movsOrdenados = [...cajaMovimientos].sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
-  let corridaEfectivo = Number(cajaActual.apertura_efectivo || 0);
-  let corridaBanco = Number(cajaActual.apertura_banco || 0);
-  const filas = movsOrdenados.map((m) => {
+  const primeraCaja = todasLasCajas[0];
+  let corridaEfectivo = Number(primeraCaja.apertura_efectivo || 0);
+  let corridaBanco = Number(primeraCaja.apertura_banco || 0);
+ 
+  const TIPO_LABEL = { venta: "Venta", cobro: "Cobro", ingreso_extra: "Ingreso extra", retiro: "Retiro", compra: "Compra" };
+ 
+  // Armamos una sola línea de tiempo: apertura de la primera caja, todos sus movimientos,
+  // y por cada caja siguiente marcamos dónde se reabrió (debería coincidir con el cierre anterior).
+  let bloques = [];
+  bloques.push({ tipo: "apertura", fecha: primeraCaja.fecha_apertura, efectivo: primeraCaja.apertura_efectivo, banco: primeraCaja.apertura_banco });
+ 
+  todasLasCajas.forEach((caja, i) => {
+    const movsDeEstaCaja = (todosLosMovs || []).filter((m) => m.caja_id === caja.id).sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+    movsDeEstaCaja.forEach((m) => bloques.push({ tipo: "mov", data: m }));
+    if (caja.estado === "cerrada") {
+      bloques.push({ tipo: "cierre", fecha: caja.fecha_cierre, efectivo: caja.cierre_efectivo, banco: caja.cierre_banco });
+      const siguiente = todasLasCajas[i + 1];
+      if (siguiente) {
+        bloques.push({ tipo: "reapertura", fecha: siguiente.fecha_apertura, efectivo: siguiente.apertura_efectivo, banco: siguiente.apertura_banco, coincide: Number(caja.cierre_efectivo) === Number(siguiente.apertura_efectivo) && Number(caja.cierre_banco) === Number(siguiente.apertura_banco) });
+      }
+    }
+  });
+ 
+  const huerfanosTotal = (todosLosMovs || []).filter((m) => m.tipo === "compra" && !m.compra_id);
+ 
+  const filasHtml = bloques.map((b) => {
+    if (b.tipo === "apertura") {
+      return `<div class="bg-[#241C2E] rounded-xl p-3 text-white text-[12px]"><strong>Capital inicial</strong> · ${new Date(b.fecha).toLocaleDateString("es-PY")} — Efectivo ${fmt(b.efectivo||0)}, Banco ${fmt(b.banco||0)}</div>`;
+    }
+    if (b.tipo === "cierre") {
+      return `<div class="bg-[#8a7d94]/10 rounded-xl p-3 text-[12px] text-[#241C2E]"><strong>Cierre de caja</strong> · ${new Date(b.fecha).toLocaleDateString("es-PY")} — quedó Efectivo ${fmt(b.efectivo||0)}, Banco ${fmt(b.banco||0)}</div>`;
+    }
+    if (b.tipo === "reapertura") {
+      return `<div class="${b.coincide ? 'bg-[#2F9E7A]/10' : 'bg-[#D64545]/10'} rounded-xl p-3 text-[12px] text-[#241C2E]"><strong>${b.coincide ? "✓" : "⚠"} Nueva caja abierta</strong> · ${new Date(b.fecha).toLocaleDateString("es-PY")} — con Efectivo ${fmt(b.efectivo||0)}, Banco ${fmt(b.banco||0)}${!b.coincide ? " (no coincide con el cierre anterior)" : ""}</div>`;
+    }
+    const m = b.data;
     const monto = Number(m.monto);
     const esIngreso = m.tipo === "venta" || m.tipo === "cobro" || m.tipo === "ingreso_extra";
     const signo = esIngreso ? 1 : -1;
     const esBanco = esMedioBanco(m.medio_pago);
     if (esBanco) corridaBanco += signo * monto; else corridaEfectivo += signo * monto;
     const huerfano = m.tipo === "compra" && !m.compra_id;
-    return { ...m, signo, esBanco, saldoEfectivo: corridaEfectivo, saldoBanco: corridaBanco, huerfano };
-  });
- 
-  const totalEfectivo = corridaEfectivo;
-  const totalBanco = corridaBanco;
-  const huerfanos = filas.filter((f) => f.huerfano);
- 
-  const TIPO_LABEL = { venta: "Venta", cobro: "Cobro", ingreso_extra: "Ingreso extra", retiro: "Retiro", compra: "Compra" };
+    return `
+      <div class="bg-white rounded-xl p-3 shadow-sm border ${huerfano ? 'border-[#D64545]/40' : 'border-black/[0.04]'}">
+        <div class="flex items-center justify-between">
+          <span class="text-[12px] font-semibold text-[#241C2E]">${huerfano ? "⚠ " : ""}${TIPO_LABEL[m.tipo] || m.tipo} · ${esBanco ? "Banco" : "Efectivo"}</span>
+          <span class="font-mono-num text-[12px] font-semibold ${signo>0?'text-[#2F9E7A]':'text-[#D64545]'}">${signo>0?"+":"−"}${fmt(monto)}</span>
+        </div>
+        <p class="text-[10px] text-[#8a7d94]">${new Date(m.fecha).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}${m.descripcion ? " · " + m.descripcion : ""}</p>
+        <p class="text-[9px] text-[#8a7d94] mt-0.5">Saldo después: efectivo ${fmt(corridaEfectivo)} · banco ${fmt(corridaBanco)}</p>
+      </div>`;
+  }).join("");
  
   content.innerHTML = `
     <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
-    ${sectionLabel("Detalle de caja")}
- 
-    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
-      <p class="text-[12px] text-[#8a7d94]">Capital inicial de esta caja</p>
-      <p class="text-[13px] text-[#241C2E]">Efectivo ${fmt(cajaActual.apertura_efectivo || 0)} · Banco ${fmt(cajaActual.apertura_banco || 0)}</p>
-      <p class="text-[12px] text-[#8a7d94] mt-2">Abierta desde ${new Date(cajaActual.fecha_apertura).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}</p>
-    </div>
+    ${sectionLabel("Detalle de caja · Historial completo")}
  
     <div class="grid grid-cols-2 gap-3 mb-4">
       <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
-        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Efectivo (calculado)</p>
-        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(totalEfectivo)}</p>
+        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Efectivo hoy (calculado)</p>
+        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(corridaEfectivo)}</p>
       </div>
       <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
-        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Banco (calculado)</p>
-        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(totalBanco)}</p>
+        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Banco hoy (calculado)</p>
+        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(corridaBanco)}</p>
       </div>
     </div>
  
-    ${huerfanos.length > 0 ? `
+    ${huerfanosTotal.length > 0 ? `
     <div class="bg-[#D64545]/10 border border-[#D64545]/25 rounded-xl p-4 mb-4">
-      <p class="text-[12px] font-semibold text-[#D64545] mb-1">⚠ ${huerfanos.length} movimiento(s) de compra sin compra asociada</p>
-      <p class="text-[11px] text-[#8a7d94]">Es probable que sean de compras que se eliminaron antes de que corrigiéramos ese descuento de la caja. Suman ${fmt(huerfanos.reduce((s,f)=>s+Number(f.monto),0))} restados del saldo. Marcados con ⚠ abajo — si confirmás que no corresponden a nada real, avisame y los borramos.</p>
+      <p class="text-[12px] font-semibold text-[#D64545] mb-1">⚠ ${huerfanosTotal.length} movimiento(s) de compra sin compra asociada, en todo el historial</p>
+      <p class="text-[11px] text-[#8a7d94]">Suman ${fmt(huerfanosTotal.reduce((s,f)=>s+Number(f.monto),0))} restados del saldo total. Es probable que sean de compras eliminadas antes de la corrección. Están marcados con ⚠ en la lista de abajo.</p>
     </div>` : ""}
  
-    ${sectionLabel("Movimientos (en orden, con saldo acumulado)")}
-    <div class="space-y-2">
-      ${filas.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Esta caja todavía no tiene movimientos, solo el capital inicial.</p>` :
-        filas.map((f) => `
-        <div class="bg-white rounded-2xl p-3.5 shadow-sm border ${f.huerfano ? 'border-[#D64545]/40' : 'border-black/[0.04]'}">
-          <div class="flex items-center justify-between mb-1">
-            <span class="text-[12px] font-semibold text-[#241C2E]">${f.huerfano ? "⚠ " : ""}${TIPO_LABEL[f.tipo] || f.tipo} · ${f.esBanco ? "Banco" : "Efectivo"}</span>
-            <span class="font-mono-num text-[13px] font-semibold ${f.signo>0?'text-[#2F9E7A]':'text-[#D64545]'}">${f.signo>0?"+":"−"}${fmt(f.monto)}</span>
-          </div>
-          <p class="text-[11px] text-[#8a7d94]">${new Date(f.fecha).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}${f.descripcion ? " · " + f.descripcion : ""}</p>
-          <p class="text-[10px] text-[#8a7d94] mt-1">Saldo después: efectivo ${fmt(f.saldoEfectivo)} · banco ${fmt(f.saldoBanco)}</p>
-        </div>`).join("")}
-    </div>
+    ${sectionLabel(`Todo el historial (${todasLasCajas.length} caja${todasLasCajas.length>1?'s':''} en total)`)}
+    <div class="space-y-2">${filasHtml}</div>
   `;
 }
  
