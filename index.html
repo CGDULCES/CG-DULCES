@@ -226,9 +226,9 @@ async function loadProveedores() {
 async function loadCompras() {
   const { data, error } = await sb
     .from("compras")
-    .select("id, proveedor_id, tipo, total, comprobante_url, registrado_por, created_at, proveedores(nombre), compra_items(id, producto_id, cantidad, costo_unitario, productos(nombre, presentacion))")
+    .select("id, proveedor_id, tipo, total, descuento, medio_pago, monto_efectivo, monto_transferencia, comprobante_url, registrado_por, created_at, proveedores(nombre), compra_items(id, producto_id, cantidad, costo_unitario, productos(nombre, presentacion))")
     .order("created_at", { ascending: false })
-    .limit(30);
+    .limit(200);
   if (error) { console.error(error); return; }
   compras = data;
 }
@@ -267,7 +267,7 @@ async function loadVentas() {
     .from("ventas")
     .select("id, total, subtotal, descuento_total, medio_pago, registrado_por, created_at, venta_items(cantidad, precio_unitario, costo_unitario, subtotal, producto_id, productos(nombre, categoria_id))")
     .order("created_at", { ascending: false })
-    .limit(60);
+    .limit(500);
   if (error) { console.error(error); return; }
   ventasHistoricas = data;
 }
@@ -2276,6 +2276,9 @@ function openEditCompra(id) {
   window.__originalCompraItems = JSON.parse(JSON.stringify(window.__compraItems));
   window.__editingProveedorId = c.proveedor_id;
   window.__editingTipo = c.tipo;
+  window.__medioPagoCompra = c.medio_pago || "efectivo";
+  window.__mixtoCompraEfectivoInicial = Number(c.monto_efectivo) || 0;
+  window.__mixtoCompraTransferenciaInicial = Number(c.monto_transferencia) || 0;
   renderCompraModal();
 }
  
@@ -2295,6 +2298,7 @@ function productosPorTipoCompra() {
  
 function renderCompraModal() {
   const editando = !!window.__editingCompraId;
+  const medioPagoActual = window.__medioPagoCompra || "efectivo";
   const opcionesProveedor = proveedores.map((p) => `<option value="${p.id}" ${editando && window.__editingProveedorId===p.id ? "selected":""}>${p.nombre}</option>`).join("");
   const subtotalCompra = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
   const descuentoCompra = window.__compraDescuento || 0;
@@ -2356,19 +2360,19 @@ function renderCompraModal() {
  
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Pagaste con</label>
     <div class="grid grid-cols-3 gap-2 mt-1 mb-3">
-      <button type="button" onclick="selectPagoCompra('efectivo', this)" class="pago-compra-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium bg-[#6B2D5C] text-white" data-pago="efectivo">Efectivo</button>
-      <button type="button" onclick="selectPagoCompra('transferencia', this)" class="pago-compra-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium" data-pago="transferencia">Transf.</button>
-      <button type="button" onclick="selectPagoCompra('mixto', this)" class="pago-compra-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium" data-pago="mixto">Mixto</button>
+      <button type="button" onclick="selectPagoCompra('efectivo', this)" class="pago-compra-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium ${medioPagoActual==='efectivo'?'bg-[#6B2D5C] text-white':''}" data-pago="efectivo">Efectivo</button>
+      <button type="button" onclick="selectPagoCompra('transferencia', this)" class="pago-compra-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium ${medioPagoActual==='transferencia'?'bg-[#6B2D5C] text-white':''}" data-pago="transferencia">Transf.</button>
+      <button type="button" onclick="selectPagoCompra('mixto', this)" class="pago-compra-btn border border-black/10 rounded-xl py-2 text-[12px] font-medium ${medioPagoActual==='mixto'?'bg-[#6B2D5C] text-white':''}" data-pago="mixto">Mixto</button>
     </div>
-    <div id="mixto-compra-wrap" class="hidden mb-4">
+    <div id="mixto-compra-wrap" class="${medioPagoActual==='mixto'?'':'hidden'} mb-4">
       <div class="grid grid-cols-2 gap-2">
         <div>
           <label class="text-[10px] text-[#8a7d94]">Efectivo</label>
-          <input id="mixto-compra-efectivo" type="number" value="0" oninput="actualizarRestoMixtoCompra()" class="w-full bg-[#F7F3FA] rounded-lg px-2 py-2 text-[13px] outline-none" />
+          <input id="mixto-compra-efectivo" type="number" value="${window.__mixtoCompraEfectivoInicial||0}" oninput="actualizarRestoMixtoCompra()" class="w-full bg-[#F7F3FA] rounded-lg px-2 py-2 text-[13px] outline-none" />
         </div>
         <div>
           <label class="text-[10px] text-[#8a7d94]">Transferencia</label>
-          <input id="mixto-compra-transferencia" type="number" value="0" oninput="actualizarRestoMixtoCompra()" class="w-full bg-[#F7F3FA] rounded-lg px-2 py-2 text-[13px] outline-none" />
+          <input id="mixto-compra-transferencia" type="number" value="${window.__mixtoCompraTransferenciaInicial||0}" oninput="actualizarRestoMixtoCompra()" class="w-full bg-[#F7F3FA] rounded-lg px-2 py-2 text-[13px] outline-none" />
         </div>
       </div>
       <p id="mixto-compra-restante" class="text-[11px] text-[#8a7d94] mt-1.5"></p>
@@ -2377,7 +2381,7 @@ function renderCompraModal() {
     <button onclick="${editando ? "saveEditCompra()" : "saveNewCompra()"}" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">${editando ? "Guardar cambios" : "Registrar compra"}</button>
     ${editando ? `<button onclick="deleteCompra()" class="w-full text-[#D64545] text-[13px] font-semibold py-3 mt-1">Eliminar esta compra</button>` : ""}
   `);
-  window.__medioPagoCompra = "efectivo";
+  window.__medioPagoCompra = medioPagoActual;
 }
  
 function selectPagoCompra(medio, btn) {
@@ -2491,8 +2495,8 @@ async function saveNewCompra() {
   }
  
   // Descontar de la caja correspondiente
-  if (monto_efectivo > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "compra", monto: monto_efectivo, medio_pago: "efectivo", descripcion: `Compra #${compra.id}` });
-  if (monto_transferencia > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "compra", monto: monto_transferencia, medio_pago: "transferencia", descripcion: `Compra #${compra.id}` });
+  if (monto_efectivo > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "compra", monto: monto_efectivo, medio_pago: "efectivo", compra_id: compra.id, descripcion: `Compra #${compra.id}` });
+  if (monto_transferencia > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "compra", monto: monto_transferencia, medio_pago: "transferencia", compra_id: compra.id, descripcion: `Compra #${compra.id}` });
  
   window.__compraItems = [];
   closeModal();
@@ -2564,6 +2568,23 @@ async function saveEditCompra() {
   }
  
   await sb.from("compras").update({ proveedor_id, tipo, total, descuento, created_at }).eq("id", compraId);
+ 
+  // Actualizar también el dinero descontado de caja, según el nuevo total
+  await sb.from("caja_movimientos").delete().eq("compra_id", compraId);
+  const medioEdit = window.__medioPagoCompra || "efectivo";
+  let nuevoEfectivo = 0, nuevaTransferencia = 0;
+  if (medioEdit === "mixto") {
+    nuevoEfectivo = Number(document.getElementById("mixto-compra-efectivo")?.value) || 0;
+    nuevaTransferencia = Number(document.getElementById("mixto-compra-transferencia")?.value) || 0;
+  } else if (medioEdit === "efectivo") {
+    nuevoEfectivo = total;
+  } else {
+    nuevaTransferencia = total;
+  }
+  if (nuevoEfectivo > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "compra", monto: nuevoEfectivo, medio_pago: "efectivo", compra_id: compraId, descripcion: `Compra #${compraId} (editada)` });
+  if (nuevaTransferencia > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "compra", monto: nuevaTransferencia, medio_pago: "transferencia", compra_id: compraId, descripcion: `Compra #${compraId} (editada)` });
+  await sb.from("compras").update({ medio_pago: medioEdit, monto_efectivo: nuevoEfectivo, monto_transferencia: nuevaTransferencia }).eq("id", compraId);
+ 
   await registrarHistorial("compras", compraId, "editar", `Compra editada, nuevo total ${fmt(total)}`);
  
   window.__editingCompraId = null;
@@ -2575,11 +2596,12 @@ async function saveEditCompra() {
 }
  
 async function deleteCompra() {
-  if (!confirm("¿Eliminar esta compra? Se va a descontar del stock lo que había sumado.")) return;
+  if (!confirm("¿Eliminar esta compra? Se va a descontar del stock lo que había sumado, y se devuelve el dinero a la caja.")) return;
   for (const it of window.__originalCompraItems) {
     const p = productos.find((pr) => pr.id === it.producto_id);
     if (p) await sb.from("productos").update({ stock: p.stock - it.cantidad * factorConversion(p) }).eq("id", p.id);
   }
+  await sb.from("caja_movimientos").delete().eq("compra_id", window.__editingCompraId);
   await sb.from("compras").delete().eq("id", window.__editingCompraId);
   await registrarHistorial("compras", window.__editingCompraId, "eliminar", `Compra eliminada`);
  
