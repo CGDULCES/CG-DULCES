@@ -424,7 +424,7 @@ function sectionLabel(text) {
 // ---------- Render principal ----------
 function render() {
   const content = document.getElementById("content");
-  const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes", "auditoria": "", "masopciones": "", "reportes": "", "promociones": "", "configuracion": "", "todas-ventas": "dashboard" };
+  const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes", "auditoria": "", "masopciones": "", "reportes": "", "promociones": "", "configuracion": "", "todas-ventas": "dashboard", "detallecaja": "" };
   const grupoActivo = mapaGrupo[activeTab] || activeTab;
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === grupoActivo));
   document.getElementById("add-product-fab").classList.toggle("screen-hidden", activeTab !== "inventario");
@@ -443,6 +443,7 @@ function render() {
   if (activeTab === "reportes") renderReportes(content);
   if (activeTab === "promociones") renderPromociones(content);
   if (activeTab === "configuracion") renderConfiguracion(content);
+  if (activeTab === "detallecaja") renderDetalleCaja(content);
   renderCartBar();
 }
  
@@ -1838,6 +1839,9 @@ function renderMasOpciones(content) {
       <button onclick="abrirReportes()" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
         <span class="text-[14px] font-semibold text-[#241C2E]">Reportes</span><span class="text-[#8a7d94]">›</span>
       </button>
+      <button onclick="irA('detallecaja')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
+        <span class="text-[14px] font-semibold text-[#241C2E]">Detalle de caja (auditar saldo)</span><span class="text-[#8a7d94]">›</span>
+      </button>
       <button onclick="irA('promociones')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
         <span class="text-[14px] font-semibold text-[#241C2E]">Promociones</span><span class="text-[#8a7d94]">›</span>
       </button>
@@ -2197,6 +2201,80 @@ function renderTodasVentas(content) {
 async function deleteVentaDesdeTodas(ventaId) {
   await deleteVenta(ventaId);
   await abrirTodasVentas();
+}
+ 
+// ---------- Detalle de caja (auditoría del saldo) ----------
+function renderDetalleCaja(content) {
+  if (!cajaActual) {
+    content.innerHTML = `
+      <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+      ${sectionLabel("Detalle de caja")}
+      <p class="text-[13px] text-[#8a7d94]">No hay ninguna caja abierta ahora mismo.</p>
+    `;
+    return;
+  }
+ 
+  // Recalculamos todo desde cero, movimiento por movimiento, para poder comparar contra lo que se ve en Caja
+  const movsOrdenados = [...cajaMovimientos].sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+  let corridaEfectivo = Number(cajaActual.apertura_efectivo || 0);
+  let corridaBanco = Number(cajaActual.apertura_banco || 0);
+  const filas = movsOrdenados.map((m) => {
+    const monto = Number(m.monto);
+    const esIngreso = m.tipo === "venta" || m.tipo === "cobro" || m.tipo === "ingreso_extra";
+    const signo = esIngreso ? 1 : -1;
+    const esBanco = esMedioBanco(m.medio_pago);
+    if (esBanco) corridaBanco += signo * monto; else corridaEfectivo += signo * monto;
+    const huerfano = m.tipo === "compra" && !m.compra_id;
+    return { ...m, signo, esBanco, saldoEfectivo: corridaEfectivo, saldoBanco: corridaBanco, huerfano };
+  });
+ 
+  const totalEfectivo = corridaEfectivo;
+  const totalBanco = corridaBanco;
+  const huerfanos = filas.filter((f) => f.huerfano);
+ 
+  const TIPO_LABEL = { venta: "Venta", cobro: "Cobro", ingreso_extra: "Ingreso extra", retiro: "Retiro", compra: "Compra" };
+ 
+  content.innerHTML = `
+    <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Detalle de caja")}
+ 
+    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
+      <p class="text-[12px] text-[#8a7d94]">Capital inicial de esta caja</p>
+      <p class="text-[13px] text-[#241C2E]">Efectivo ${fmt(cajaActual.apertura_efectivo || 0)} · Banco ${fmt(cajaActual.apertura_banco || 0)}</p>
+      <p class="text-[12px] text-[#8a7d94] mt-2">Abierta desde ${new Date(cajaActual.fecha_apertura).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}</p>
+    </div>
+ 
+    <div class="grid grid-cols-2 gap-3 mb-4">
+      <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Efectivo (calculado)</p>
+        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(totalEfectivo)}</p>
+      </div>
+      <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Banco (calculado)</p>
+        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(totalBanco)}</p>
+      </div>
+    </div>
+ 
+    ${huerfanos.length > 0 ? `
+    <div class="bg-[#D64545]/10 border border-[#D64545]/25 rounded-xl p-4 mb-4">
+      <p class="text-[12px] font-semibold text-[#D64545] mb-1">⚠ ${huerfanos.length} movimiento(s) de compra sin compra asociada</p>
+      <p class="text-[11px] text-[#8a7d94]">Es probable que sean de compras que se eliminaron antes de que corrigiéramos ese descuento de la caja. Suman ${fmt(huerfanos.reduce((s,f)=>s+Number(f.monto),0))} restados del saldo. Marcados con ⚠ abajo — si confirmás que no corresponden a nada real, avisame y los borramos.</p>
+    </div>` : ""}
+ 
+    ${sectionLabel("Movimientos (en orden, con saldo acumulado)")}
+    <div class="space-y-2">
+      ${filas.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Esta caja todavía no tiene movimientos, solo el capital inicial.</p>` :
+        filas.map((f) => `
+        <div class="bg-white rounded-2xl p-3.5 shadow-sm border ${f.huerfano ? 'border-[#D64545]/40' : 'border-black/[0.04]'}">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[12px] font-semibold text-[#241C2E]">${f.huerfano ? "⚠ " : ""}${TIPO_LABEL[f.tipo] || f.tipo} · ${f.esBanco ? "Banco" : "Efectivo"}</span>
+            <span class="font-mono-num text-[13px] font-semibold ${f.signo>0?'text-[#2F9E7A]':'text-[#D64545]'}">${f.signo>0?"+":"−"}${fmt(f.monto)}</span>
+          </div>
+          <p class="text-[11px] text-[#8a7d94]">${new Date(f.fecha).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}${f.descripcion ? " · " + f.descripcion : ""}</p>
+          <p class="text-[10px] text-[#8a7d94] mt-1">Saldo después: efectivo ${fmt(f.saldoEfectivo)} · banco ${fmt(f.saldoBanco)}</p>
+        </div>`).join("")}
+    </div>
+  `;
 }
  
 // ---------- Auditoría ----------
