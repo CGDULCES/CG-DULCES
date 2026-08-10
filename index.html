@@ -654,8 +654,23 @@ async function abrirCaja() {
   await loadAll();
 }
  
-function openCerrarCaja() {
-  const { efectivo, banco } = saldosCajaActual();
+async function calcularSaldosCajaFrescos() {
+  if (!cajaActual) return { efectivo: 0, banco: 0 };
+  const { data: movsFrescos } = await sb.from("caja_movimientos").select("*").eq("caja_id", cajaActual.id);
+  let efectivo = Number(cajaActual.apertura_efectivo || 0);
+  let banco = Number(cajaActual.apertura_banco || 0);
+  (movsFrescos || []).forEach((m) => {
+    const monto = Number(m.monto);
+    const esIngreso = m.tipo === "venta" || m.tipo === "cobro" || m.tipo === "ingreso_extra";
+    const signo = esIngreso ? 1 : -1;
+    if (esMedioBanco(m.medio_pago)) banco += signo * monto;
+    else efectivo += signo * monto;
+  });
+  return { efectivo, banco };
+}
+ 
+async function openCerrarCaja() {
+  const { efectivo, banco } = await calcularSaldosCajaFrescos();
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Cerrar caja</p>
     <p class="text-[12px] text-[#8a7d94] mb-4">Según el sistema: ${fmt(efectivo)} en efectivo, ${fmt(banco)} en banco</p>
@@ -663,15 +678,14 @@ function openCerrarCaja() {
     <input id="caja-cierre-efectivo" type="number" placeholder="${efectivo}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Banco contado (opcional)</label>
     <input id="caja-cierre-banco" type="number" placeholder="${banco}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
-    <button onclick="saveCerrarCaja()" class="w-full bg-[#D64545] text-white font-semibold rounded-xl py-3">Cerrar caja</button>
+    <button onclick="saveCerrarCaja(${efectivo}, ${banco})" class="w-full bg-[#D64545] text-white font-semibold rounded-xl py-3">Cerrar caja</button>
   `);
 }
-async function saveCerrarCaja() {
-  const { efectivo, banco } = saldosCajaActual();
+async function saveCerrarCaja(efectivoCalculado, bancoCalculado) {
   const valorEfectivo = document.getElementById("caja-cierre-efectivo").value;
   const valorBanco = document.getElementById("caja-cierre-banco").value;
-  const cierre_efectivo = valorEfectivo ? Number(valorEfectivo) : efectivo;
-  const cierre_banco = valorBanco ? Number(valorBanco) : banco;
+  const cierre_efectivo = valorEfectivo ? Number(valorEfectivo) : efectivoCalculado;
+  const cierre_banco = valorBanco ? Number(valorBanco) : bancoCalculado;
   const { error } = await sb.from("caja").update({ estado: "cerrada", fecha_cierre: new Date().toISOString(), cierre_efectivo, cierre_banco }).eq("id", cajaActual.id);
   if (error) { alert("No se pudo cerrar la caja."); console.error(error); return; }
   await registrarHistorial("caja", cajaActual.id, "editar", `Caja cerrada — efectivo ${fmt(cierre_efectivo)}, banco ${fmt(cierre_banco)}`);
@@ -1373,6 +1387,63 @@ function pagadoDeReparto(ventaId) {
   return window.__clienteDetalleCobros.filter((c) => c.venta_id === ventaId && c.cliente_id === clienteId).reduce((s, c) => s + Number(c.monto), 0);
 }
  
+// ---------- Ver y editar pagos (cobros) ya hechos a una venta ----------
+async function openPagosDeVenta(ventaId, clienteIdFiltro) {
+  let query = sb.from("cobros").select("*").eq("venta_id", ventaId);
+  if (clienteIdFiltro) query = query.eq("cliente_id", clienteIdFiltro);
+  const { data: pagos } = await query.order("created_at", { ascending: false });
+  window.__pagosVentaActual = pagos || [];
+  window.__pagosVentaId = ventaId;
+  window.__pagosClienteFiltro = clienteIdFiltro;
+  renderPagosDeVentaModal();
+}
+ 
+function renderPagosDeVentaModal() {
+  const pagos = window.__pagosVentaActual;
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Pagos registrados</p>
+    <div class="space-y-2 mb-2">
+      ${pagos.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">No hay pagos para esta venta.</p>` :
+        pagos.map((p) => `
+        <div class="bg-[#F7F3FA] rounded-xl p-3 flex items-center justify-between">
+          <div>
+            <p class="text-[13px] font-semibold text-[#241C2E]">${fmt(p.monto)} · ${p.medio_pago === "transferencia" ? "Transferencia" : p.medio_pago === "qr" ? "QR" : "Efectivo"}</p>
+            <p class="text-[11px] text-[#8a7d94]">${new Date(p.created_at).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}</p>
+          </div>
+          <button onclick="openEditCobroIndividual(${p.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar</button>
+        </div>`).join("")}
+    </div>
+  `);
+}
+ 
+function openEditCobroIndividual(cobroId) {
+  const pago = window.__pagosVentaActual.find((p) => p.id === cobroId);
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Editar pago</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto</label>
+    <input id="editcobro-monto" type="number" value="${pago.monto}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Forma de pago</label>
+    <select id="editcobro-medio" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none">
+      <option value="efectivo" ${pago.medio_pago==='efectivo'?'selected':''}>Efectivo</option>
+      <option value="transferencia" ${pago.medio_pago==='transferencia'?'selected':''}>Transferencia</option>
+      <option value="qr" ${pago.medio_pago==='qr'?'selected':''}>QR</option>
+    </select>
+    <button onclick="saveEditCobroIndividual(${cobroId})" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Guardar</button>
+  `);
+}
+ 
+async function saveEditCobroIndividual(cobroId) {
+  const monto = Number(document.getElementById("editcobro-monto").value) || 0;
+  const medio_pago = document.getElementById("editcobro-medio").value;
+  await sb.from("cobros").update({ monto, medio_pago }).eq("id", cobroId);
+  // Esto es lo que hace que el dinero se mueva solo entre efectivo y banco en la caja:
+  await sb.from("caja_movimientos").update({ monto, medio_pago }).eq("cobro_id", cobroId);
+  await registrarHistorial("cobros", cobroId, "editar", `Pago corregido a ${fmt(monto)} (${medio_pago})`);
+  closeModal();
+  await loadAll();
+  if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
+}
+ 
 function renderClienteDetalle(content) {
   const cliente = clientes.find((c) => c.id === window.__clienteDetalleId);
   if (!cliente) { content.innerHTML = ""; return; }
@@ -1423,6 +1494,7 @@ function renderClienteDetalle(content) {
                       ? `<span class="text-[11px] text-[#2F9E7A] font-semibold">✓ Pagado</span>`
                       : `<span class="text-[11px] text-[#D64545] font-semibold">Pendiente ${fmt(pendiente)}</span>`}
                   <div class="flex items-center gap-3">
+                    ${pagado > 0 ? `<button onclick="openPagosDeVenta(${v.id}, null)" class="text-[11px] text-[#6B2D5C] font-semibold">Ver pagos</button>` : ""}
                     ${seleccionable ? `<button onclick="openCobroVenta(${v.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Cobrar esta</button>` : ""}
                     <button onclick="openEditVenta(${v.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar</button>
                     <button onclick="deleteVenta(${v.id})" class="text-[11px] text-[#D64545] font-semibold">Eliminar</button>
@@ -1454,6 +1526,7 @@ function renderClienteDetalle(content) {
               ? `<span class="text-[11px] text-[#2F9E7A] font-semibold">✓ Pagado</span>`
               : `<span class="text-[11px] text-[#D64545] font-semibold">Pendiente ${fmt(pendiente)}</span>`}
             <div class="flex items-center gap-3">
+              ${pagadoDeReparto(r.venta_id) > 0 ? `<button onclick="openPagosDeVenta(${r.venta_id}, ${window.__clienteDetalleId})" class="text-[11px] text-[#6B2D5C] font-semibold">Ver pagos</button>` : ""}
               <button onclick="openEditFechaReparto(${r.venta_id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar fecha</button>
               <button onclick="openEditReparto(${r.venta_id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar división</button>
               ${pendiente > 0 ? `<button onclick="openCobroReparto(${r.venta_id}, ${pendiente})" class="text-[11px] text-[#6B2D5C] font-semibold">Cobrar esta</button>` : ""}
@@ -1716,9 +1789,12 @@ async function saveCobroSeleccionadas() {
   const totalCobrado = filas.reduce((s, f) => s + f.monto, 0);
  
   for (const fila of filas) {
-    const { data: cobro, error } = await sb.from("cobros").insert(fila).select().single();
+    const { error } = await sb.from("cobros").insert(fila);
     if (error) { alert("No se pudo registrar uno de los cobros."); console.error(error); continue; }
-    await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "cobro", monto: fila.monto, medio_pago, venta_id: fila.venta_id, cobro_id: cobro.id, descripcion: `Cobro a ${cliente?.nombre || ""}` });
+  }
+  // Un solo movimiento de caja por todo el lote, no uno por cada deuda
+  if (totalCobrado > 0) {
+    await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "cobro", monto: totalCobrado, medio_pago, descripcion: `Cobro a ${cliente?.nombre || ""} (${filas.length} deuda${filas.length>1?'s':''})` });
   }
   await registrarHistorial("cobros", clienteId, "crear", `Cobro de ${fmt(totalCobrado)} (${filas.length} ventas) a ${cliente?.nombre || ""}`);
   closeModal();
@@ -2249,7 +2325,24 @@ async function renderDetalleCaja(content) {
  
   const huerfanosTotal = (todosLosMovs || []).filter((m) => m.tipo === "compra" && !m.compra_id);
  
-  const filasHtml = bloques.map((b) => {
+  // Primero calculamos el saldo en orden cronológico (necesario para que la cuenta sea correcta)...
+  const bloquesConSaldo = bloques.map((b) => {
+    if (b.tipo === "mov") {
+      const m = b.data;
+      const monto = Number(m.monto);
+      const esIngreso = m.tipo === "venta" || m.tipo === "cobro" || m.tipo === "ingreso_extra";
+      const signo = esIngreso ? 1 : -1;
+      const esBanco = esMedioBanco(m.medio_pago);
+      if (esBanco) corridaBanco += signo * monto; else corridaEfectivo += signo * monto;
+      return { ...b, signo, esBanco, saldoEfectivo: corridaEfectivo, saldoBanco: corridaBanco };
+    }
+    return b;
+  });
+  const efectivoFinal = corridaEfectivo;
+  const bancoFinal = corridaBanco;
+ 
+  // ...y ahora mostramos la lista con los movimientos más recientes arriba
+  const filasHtml = [...bloquesConSaldo].reverse().map((b) => {
     if (b.tipo === "apertura") {
       return `<div class="bg-[#241C2E] rounded-xl p-3 text-white text-[12px]"><strong>Capital inicial</strong> · ${new Date(b.fecha).toLocaleDateString("es-PY")} — Efectivo ${fmt(b.efectivo||0)}, Banco ${fmt(b.banco||0)}</div>`;
     }
@@ -2261,19 +2354,15 @@ async function renderDetalleCaja(content) {
     }
     const m = b.data;
     const monto = Number(m.monto);
-    const esIngreso = m.tipo === "venta" || m.tipo === "cobro" || m.tipo === "ingreso_extra";
-    const signo = esIngreso ? 1 : -1;
-    const esBanco = esMedioBanco(m.medio_pago);
-    if (esBanco) corridaBanco += signo * monto; else corridaEfectivo += signo * monto;
     const huerfano = m.tipo === "compra" && !m.compra_id;
     return `
       <div class="bg-white rounded-xl p-3 shadow-sm border ${huerfano ? 'border-[#D64545]/40' : 'border-black/[0.04]'}">
         <div class="flex items-center justify-between">
-          <span class="text-[12px] font-semibold text-[#241C2E]">${huerfano ? "⚠ " : ""}${TIPO_LABEL[m.tipo] || m.tipo} · ${esBanco ? "Banco" : "Efectivo"}</span>
-          <span class="font-mono-num text-[12px] font-semibold ${signo>0?'text-[#2F9E7A]':'text-[#D64545]'}">${signo>0?"+":"−"}${fmt(monto)}</span>
+          <span class="text-[12px] font-semibold text-[#241C2E]">${huerfano ? "⚠ " : ""}${TIPO_LABEL[m.tipo] || m.tipo} · ${b.esBanco ? "Banco" : "Efectivo"}</span>
+          <span class="font-mono-num text-[12px] font-semibold ${b.signo>0?'text-[#2F9E7A]':'text-[#D64545]'}">${b.signo>0?"+":"−"}${fmt(monto)}</span>
         </div>
         <p class="text-[10px] text-[#8a7d94]">${new Date(m.fecha).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}${m.descripcion ? " · " + m.descripcion : ""}</p>
-        <p class="text-[9px] text-[#8a7d94] mt-0.5">Saldo después: efectivo ${fmt(corridaEfectivo)} · banco ${fmt(corridaBanco)}</p>
+        <p class="text-[9px] text-[#8a7d94] mt-0.5">Saldo después: efectivo ${fmt(b.saldoEfectivo)} · banco ${fmt(b.saldoBanco)}</p>
       </div>`;
   }).join("");
  
@@ -2284,11 +2373,11 @@ async function renderDetalleCaja(content) {
     <div class="grid grid-cols-2 gap-3 mb-4">
       <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
         <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Efectivo hoy (calculado)</p>
-        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(corridaEfectivo)}</p>
+        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(efectivoFinal)}</p>
       </div>
       <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
         <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Banco hoy (calculado)</p>
-        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(corridaBanco)}</p>
+        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(bancoFinal)}</p>
       </div>
     </div>
  
@@ -2717,6 +2806,53 @@ async function deleteCompra() {
   render();
 }
  
+function openVerCarrito() {
+  renderVerCarritoModal();
+}
+ 
+function renderVerCarritoModal() {
+  const calculo = calcularCarritoPromos();
+  const totalHelados = heladoCart.reduce((s, h) => s + h.total, 0);
+  const total = calculo.total + totalHelados;
+ 
+  const lineasNormales = calculo.lineas.map((l) => `
+    <div class="flex items-center justify-between gap-2 bg-[#F7F3FA] rounded-xl p-3 mb-2">
+      <div class="flex-1 min-w-0">
+        <p class="text-[13px] font-semibold text-[#241C2E] truncate">${l.producto.nombre}${l.producto.presentacion ? " · " + l.producto.presentacion : ""}</p>
+        <p class="text-[11px] text-[#8a7d94]">${l.cantidad} × ${fmt(l.producto.precio_venta)}${l.descuento > 0 ? ` · promo −${fmt(l.descuento)}` : ""}</p>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <button onclick="changeQty(${l.producto.id}, -1); renderVerCarritoModal();" class="w-6 h-6 rounded-full bg-white flex items-center justify-center text-[13px]">−</button>
+        <span class="font-mono-num text-[13px] font-semibold w-4 text-center">${l.cantidad}</span>
+        <button onclick="changeQty(${l.producto.id}, 1); renderVerCarritoModal();" class="w-6 h-6 rounded-full bg-[#6B2D5C] text-white flex items-center justify-center text-[13px]">+</button>
+      </div>
+    </div>
+  `).join("");
+ 
+  const lineasHelado = heladoCart.map((h) => `
+    <div class="flex items-center justify-between gap-2 bg-[#F7F3FA] rounded-xl p-3 mb-2">
+      <div class="flex-1 min-w-0">
+        <p class="text-[13px] font-semibold text-[#241C2E]">🍦 Helado</p>
+        <p class="text-[11px] text-[#8a7d94]">${h.resumen}</p>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <span class="font-mono-num text-[13px] font-semibold">${fmt(h.total)}</span>
+        <button onclick="quitarHeladoCart('${h.id}'); renderVerCarritoModal();" class="text-[#D64545] text-[16px] leading-none">×</button>
+      </div>
+    </div>
+  `).join("");
+ 
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Tu carrito</p>
+    ${lineasNormales || lineasHelado ? `${lineasNormales}${lineasHelado}` : `<p class="text-[13px] text-[#8a7d94] mb-4">El carrito está vacío.</p>`}
+    <div class="flex items-center justify-between mt-4 mb-5 pt-3 border-t border-black/[0.06]">
+      <span class="text-[13px] text-[#8a7d94]">Total</span>
+      <span class="font-mono-num text-[20px] font-semibold text-[#241C2E]">${fmt(total)}</span>
+    </div>
+    <button onclick="openConfirmSale()" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Cobrar ✓</button>
+  `);
+}
+ 
 function renderCartBar() {
   const bar = document.getElementById("cart-bar");
   const items = Object.entries(cart).filter(([, q]) => q > 0);
@@ -2729,10 +2865,10 @@ function renderCartBar() {
   bar.classList.remove("screen-hidden");
   bar.innerHTML = `
     <div class="flex items-center justify-between">
-      <div>
-        <p class="text-white/60 text-[11px]">${cantidadItems} producto(s)</p>
+      <button onclick="openVerCarrito()" class="text-left">
+        <p class="text-white/60 text-[11px] underline">${cantidadItems} producto(s) · Ver carrito</p>
         <p class="text-white font-mono-num text-[16px] font-semibold">${fmt(total)}</p>
-      </div>
+      </button>
       <button onclick="openConfirmSale()" class="bg-[#2F9E7A] text-white text-[13px] font-semibold px-4 py-2.5 rounded-xl">
         Confirmar venta ✓
       </button>
