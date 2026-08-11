@@ -265,7 +265,7 @@ async function loadUsuarios() {
 async function loadVentas() {
   const { data, error } = await sb
     .from("ventas")
-    .select("id, total, subtotal, descuento_total, medio_pago, registrado_por, created_at, venta_items(cantidad, precio_unitario, costo_unitario, subtotal, producto_id, productos(nombre, categoria_id))")
+    .select("id, total, subtotal, descuento_total, medio_pago, es_fiado, registrado_por, created_at, venta_items(cantidad, precio_unitario, costo_unitario, subtotal, producto_id, productos(nombre, categoria_id))")
     .order("created_at", { ascending: false })
     .limit(500);
   if (error) { console.error(error); return; }
@@ -504,9 +504,9 @@ function renderDashboard(content) {
             <div class="flex items-center justify-between gap-3">
               <div class="min-w-0">
                 <p class="text-[13px] text-[#241C2E] truncate">${(v.venta_items||[]).map(it=>`${it.cantidad}× ${it.productos?.nombre||""}`).join(", ")}</p>
-                <p class="text-[11px] text-[#8a7d94]">${new Date(v.created_at).toLocaleTimeString("es-PY",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})} · ${v.registrado_por || ""}</p>
+                <p class="text-[11px] text-[#8a7d94]">${new Date(v.created_at).toLocaleTimeString("es-PY",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})} · ${v.registrado_por || ""}${v.es_fiado ? ` · <span class="text-[#D64545] font-semibold">Fiado, pendiente</span>` : ""}</p>
               </div>
-              <span class="font-mono-num text-[13px] font-semibold shrink-0">${fmt(v.total)}</span>
+              <span class="font-mono-num text-[13px] font-semibold shrink-0 ${v.es_fiado ? "text-[#8a7d94]" : ""}">${fmt(v.total)}</span>
             </div>`).join("")}
         </div>
         <button onclick="abrirTodasVentas()" class="w-full text-center text-[12px] text-[#6B2D5C] font-semibold mt-3 pt-3 border-t border-black/[0.06]">Ver todas las ventas ›</button>
@@ -1965,6 +1965,44 @@ function cambiarPeriodoReportes(periodo) {
   render();
 }
  
+// Calcula ventas/ganancia/categorías en base a dinero REAL: ventas al contado + cobros de fiado
+// recibidos en el período (sin importar cuándo se hizo la venta original). Misma regla que el Dashboard.
+function statsCashBasis(ventasR, desde, hasta) {
+  const enRango = (fecha) => { const f = new Date(fecha); return f >= desde && f < hasta; };
+ 
+  const ventasContado = ventasR.filter((v) => !v.es_fiado && enRango(v.created_at));
+  const cobrosEnRango = cobros.filter((c) => enRango(c.created_at));
+ 
+  let totalVentas = ventasContado.reduce((s, v) => s + Number(v.total), 0);
+  let totalGanancia = ventasContado.reduce((s, v) => s + (v.venta_items || []).reduce((si, it) => si + (it.subtotal - it.costo_unitario * it.cantidad), 0), 0);
+ 
+  const porCategoria = {};
+  ventasContado.forEach((v) => (v.venta_items || []).forEach((it) => {
+    const cat = categorias.find((c) => c.id === it.productos?.categoria_id)?.nombre || "Sin categoría";
+    porCategoria[cat] = (porCategoria[cat] || 0) + Number(it.subtotal);
+  }));
+ 
+  cobrosEnRango.forEach((c) => {
+    const monto = Number(c.monto);
+    totalVentas += monto;
+    const venta = ventasR.find((v) => v.id === c.venta_id);
+    if (venta && venta.total > 0) {
+      const costoTotal = (venta.venta_items || []).reduce((s, it) => s + it.costo_unitario * it.cantidad, 0);
+      const ratioGanancia = (venta.total - costoTotal) / venta.total;
+      totalGanancia += monto * ratioGanancia;
+      (venta.venta_items || []).forEach((it) => {
+        const cat = categorias.find((cc) => cc.id === it.productos?.categoria_id)?.nombre || "Sin categoría";
+        const parte = (Number(it.subtotal) / venta.total) * monto;
+        porCategoria[cat] = (porCategoria[cat] || 0) + parte;
+      });
+    } else {
+      totalGanancia += monto; // venta vieja fuera del rango cargado: se cuenta entero, sin descomponer por categoría
+    }
+  });
+ 
+  return { totalVentas, totalGanancia, porCategoria };
+}
+ 
 function renderReportes(content) {
   const ventasR = window.__reportesVentas;
   const ahora = new Date();
@@ -1972,37 +2010,28 @@ function renderReportes(content) {
   if (window.__reportesPeriodo === "semana") { desde = new Date(); desde.setDate(desde.getDate() - 7); }
   else if (window.__reportesPeriodo === "mes") { desde = new Date(); desde.setMonth(desde.getMonth() - 1); }
   else desde = new Date(2000, 0, 1);
+  const hastaAhora = new Date(ahora.getTime() + 1000); // incluye este instante
  
-  const filtradas = ventasR.filter((v) => new Date(v.created_at) >= desde);
-  const totalVentas = filtradas.reduce((s, v) => s + Number(v.total), 0);
-  const totalGanancia = filtradas.reduce((s, v) => s + (v.venta_items || []).reduce((si, it) => si + (it.subtotal - it.costo_unitario * it.cantidad), 0), 0);
- 
-  // Por categoría
-  const porCategoria = {};
-  filtradas.forEach((v) => (v.venta_items || []).forEach((it) => {
-    const catId = it.productos?.categoria_id;
-    const cat = categorias.find((c) => c.id === catId)?.nombre || "Sin categoría";
-    porCategoria[cat] = (porCategoria[cat] || 0) + Number(it.subtotal);
-  }));
+  const { totalVentas, totalGanancia, porCategoria } = statsCashBasis(ventasR, desde, hastaAhora);
   const categoriasOrdenadas = Object.entries(porCategoria).sort((a, b) => b[1] - a[1]);
  
-  // Por mes (últimos 6)
+  // Por mes (últimos 6), también en dinero real
   const meses = [];
   for (let i = 5; i >= 0; i--) {
     const d = new Date(ahora.getFullYear(), ahora.getMonth() - i, 1);
     meses.push(d);
   }
-  const totalesPorMes = meses.map((m) =>
-    ventasR.filter((v) => {
-      const fv = new Date(v.created_at);
-      return fv.getFullYear() === m.getFullYear() && fv.getMonth() === m.getMonth();
-    }).reduce((s, v) => s + Number(v.total), 0)
-  );
+  const totalesPorMes = meses.map((m) => {
+    const inicioMes = new Date(m.getFullYear(), m.getMonth(), 1);
+    const finMes = new Date(m.getFullYear(), m.getMonth() + 1, 1);
+    return statsCashBasis(ventasR, inicioMes, finMes).totalVentas;
+  });
   const labelsMeses = meses.map((m) => m.toLocaleDateString("es-PY", { month: "short" }));
  
   content.innerHTML = `
     <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
     ${sectionLabel("Reportes")}
+    <p class="text-[11px] text-[#8a7d94] mb-3">Solo cuenta dinero que ya entró (ventas al contado + fiados ya cobrados)</p>
  
     <div class="flex gap-2 mb-4">
       <button onclick="cambiarPeriodoReportes('semana')" class="flex-1 rounded-xl py-2 text-[12px] font-semibold ${window.__reportesPeriodo==='semana' ? 'bg-[#6B2D5C] text-white' : 'bg-white text-[#8a7d94] border border-black/[0.06]'}">Semana</button>
@@ -2012,24 +2041,24 @@ function renderReportes(content) {
  
     <div class="grid grid-cols-2 gap-3 mb-4">
       <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
-        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Ventas del período</p>
+        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Dinero real del período</p>
         <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(totalVentas)}</p>
       </div>
       <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
-        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Ganancia del período</p>
+        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Ganancia real del período</p>
         <p class="font-mono-num text-[17px] font-semibold text-[#2F9E7A]">${fmt(totalGanancia)}</p>
       </div>
     </div>
  
     <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
-      ${sectionLabel("Ventas por mes (últimos 6)")}
+      ${sectionLabel("Dinero real por mes (últimos 6)")}
       <div class="h-[140px]"><canvas id="reportesChart"></canvas></div>
     </div>
  
     <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
       ${sectionLabel("Por categoría (período elegido)")}
       <div class="space-y-2">
-        ${categoriasOrdenadas.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Sin ventas en este período.</p>` :
+        ${categoriasOrdenadas.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Sin dinero real en este período.</p>` :
           categoriasOrdenadas.map(([cat, monto]) => `
           <div class="flex items-center justify-between text-[13px]">
             <span class="text-[#241C2E]">${cat}</span>
