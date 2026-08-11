@@ -638,20 +638,27 @@ async function crearCajaInicial() {
 }
  
 async function abrirCaja() {
-  const { count } = await sb.from("caja").select("*", { count: "exact", head: true });
-  if (count === 0) { mostrarCapitalInicial(); return; }
+  if (procesandoAccion) return;
+  if (cajaActual) return; // ya hay una caja abierta, no abrir otra
+  procesandoAccion = true;
+  try {
+    const { count } = await sb.from("caja").select("*", { count: "exact", head: true });
+    if (count === 0) { mostrarCapitalInicial(); return; }
  
-  const registrado_por = usuarios[0]?.nombre || "";
-  // Repone automáticamente lo que quedó al cerrar la última caja
-  const { data: ultimaCerrada } = await sb.from("caja").select("*").eq("estado", "cerrada").order("fecha_cierre", { ascending: false }).limit(1);
-  const previa = ultimaCerrada && ultimaCerrada.length ? ultimaCerrada[0] : null;
-  const apertura_efectivo = previa ? Number(previa.cierre_efectivo || 0) : 0;
-  const apertura_banco = previa ? Number(previa.cierre_banco || 0) : 0;
+    const registrado_por = usuarios[0]?.nombre || "";
+    // Repone automáticamente lo que quedó al cerrar la última caja
+    const { data: ultimaCerrada } = await sb.from("caja").select("*").eq("estado", "cerrada").order("fecha_cierre", { ascending: false }).limit(1);
+    const previa = ultimaCerrada && ultimaCerrada.length ? ultimaCerrada[0] : null;
+    const apertura_efectivo = previa ? Number(previa.cierre_efectivo || 0) : 0;
+    const apertura_banco = previa ? Number(previa.cierre_banco || 0) : 0;
  
-  const { data, error } = await sb.from("caja").insert({ apertura_efectivo, apertura_banco, registrado_por, estado: "abierta" }).select().single();
-  if (error) { alert("No se pudo abrir la caja."); console.error(error); return; }
-  await registrarHistorial("caja", data.id, "crear", `Caja abierta — efectivo ${fmt(apertura_efectivo)}, banco ${fmt(apertura_banco)}`);
-  await loadAll();
+    const { data, error } = await sb.from("caja").insert({ apertura_efectivo, apertura_banco, registrado_por, estado: "abierta" }).select().single();
+    if (error) { alert("No se pudo abrir la caja."); console.error(error); return; }
+    await registrarHistorial("caja", data.id, "crear", `Caja abierta — efectivo ${fmt(apertura_efectivo)}, banco ${fmt(apertura_banco)}`);
+    await loadAll();
+  } finally {
+    procesandoAccion = false;
+  }
 }
  
 async function calcularSaldosCajaFrescos() {
@@ -682,6 +689,9 @@ async function openCerrarCaja() {
   `);
 }
 async function saveCerrarCaja(efectivoCalculado, bancoCalculado) {
+  if (procesandoAccion) return;
+  procesandoAccion = true;
+  try {
   const valorEfectivo = document.getElementById("caja-cierre-efectivo").value;
   const valorBanco = document.getElementById("caja-cierre-banco").value;
   const cierre_efectivo = valorEfectivo ? Number(valorEfectivo) : efectivoCalculado;
@@ -691,6 +701,9 @@ async function saveCerrarCaja(efectivoCalculado, bancoCalculado) {
   await registrarHistorial("caja", cajaActual.id, "editar", `Caja cerrada — efectivo ${fmt(cierre_efectivo)}, banco ${fmt(cierre_banco)}`);
   closeModal();
   await loadAll();
+  } finally {
+    procesandoAccion = false;
+  }
 }
  
 function openMovimientoCaja(tipo) {
