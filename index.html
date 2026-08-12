@@ -424,7 +424,7 @@ function sectionLabel(text) {
 // ---------- Render principal ----------
 function render() {
   const content = document.getElementById("content");
-  const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes", "auditoria": "", "masopciones": "", "reportes": "", "promociones": "", "configuracion": "", "todas-ventas": "dashboard", "detallecaja": "" };
+  const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes", "auditoria": "", "masopciones": "", "reportes": "", "promociones": "", "configuracion": "", "todas-ventas": "dashboard", "detallecaja": "", "perdidas": "" };
   const grupoActivo = mapaGrupo[activeTab] || activeTab;
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === grupoActivo));
   document.getElementById("add-product-fab").classList.toggle("screen-hidden", activeTab !== "inventario");
@@ -444,6 +444,7 @@ function render() {
   if (activeTab === "promociones") renderPromociones(content);
   if (activeTab === "configuracion") renderConfiguracion(content);
   if (activeTab === "detallecaja") renderDetalleCaja(content);
+  if (activeTab === "perdidas") renderPerdidas(content);
   renderCartBar();
 }
  
@@ -1931,6 +1932,9 @@ function renderMasOpciones(content) {
       <button onclick="irA('detallecaja')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
         <span class="text-[14px] font-semibold text-[#241C2E]">Detalle de caja (auditar saldo)</span><span class="text-[#8a7d94]">›</span>
       </button>
+      <button onclick="irAPerdidas()" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
+        <span class="text-[14px] font-semibold text-[#241C2E]">Pérdidas (roturas, vencidos)</span><span class="text-[#8a7d94]">›</span>
+      </button>
       <button onclick="irA('promociones')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
         <span class="text-[14px] font-semibold text-[#241C2E]">Promociones</span><span class="text-[#8a7d94]">›</span>
       </button>
@@ -2432,6 +2436,123 @@ async function renderDetalleCaja(content) {
     ${sectionLabel(`Todo el historial (${todasLasCajas.length} caja${todasLasCajas.length>1?'s':''} en total)`)}
     <div class="space-y-2">${filasHtml}</div>
   `;
+}
+ 
+// ---------- Pérdidas (roturas, vencidos, dañados) ----------
+window.__perdidas = [];
+window.__perdidaItems = [];
+ 
+async function irAPerdidas() {
+  const { data } = await sb
+    .from("perdidas")
+    .select("id, cantidad, motivo, costo_unitario, registrado_por, created_at, productos(nombre, presentacion)")
+    .order("created_at", { ascending: false })
+    .limit(200);
+  window.__perdidas = data || [];
+  activeTab = "perdidas";
+  render();
+}
+ 
+function renderPerdidas(content) {
+  const totalPerdido = window.__perdidas.reduce((s, p) => s + Number(p.cantidad) * Number(p.costo_unitario || 0), 0);
+  content.innerHTML = `
+    <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Pérdidas")}
+    <div class="bg-[#D64545]/10 border border-[#D64545]/25 rounded-xl p-4 mb-4">
+      <p class="text-[11px] text-[#8a7d94]">Costo total perdido (histórico)</p>
+      <p class="font-mono-num text-[18px] font-semibold text-[#D64545]">${fmt(totalPerdido)}</p>
+    </div>
+    <div class="space-y-2 mb-4">
+      ${window.__perdidas.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Todavía no registraste ninguna pérdida.</p>` :
+        window.__perdidas.map((p) => `
+        <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+          <div class="flex items-center justify-between mb-1">
+            <span class="text-[13px] font-semibold text-[#241C2E]">${p.cantidad}× ${p.productos?.nombre || ""}${p.productos?.presentacion ? " · " + p.productos.presentacion : ""}</span>
+            <span class="font-mono-num text-[13px] font-semibold text-[#D64545]">−${fmt(p.cantidad * (p.costo_unitario||0))}</span>
+          </div>
+          <p class="text-[11px] text-[#8a7d94]">${new Date(p.created_at).toLocaleDateString("es-PY")}${p.motivo ? " · " + p.motivo : ""} · ${p.registrado_por || ""}</p>
+        </div>`).join("")}
+    </div>
+    <button onclick="openNuevaPerdida()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">+ Registrar pérdida</button>
+  `;
+}
+ 
+function openNuevaPerdida() {
+  const primero = productos.find((p) => !p.es_insumo) || productos[0];
+  window.__perdidaItems = [{ producto_id: primero?.id, cantidad: 1 }];
+  window.__perdidaMotivo = "";
+  renderNuevaPerdidaModal();
+}
+ 
+function renderNuevaPerdidaModal() {
+  const filasHtml = window.__perdidaItems.map((it, i) => `
+    <div class="bg-[#F7F3FA] rounded-xl p-3 mb-2">
+      <select onchange="cambiarItemPerdida(${i}, 'producto_id', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] mb-2 outline-none">
+        ${productos.map((p) => `<option value="${p.id}" ${p.id===it.producto_id?"selected":""}>${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}${p.es_insumo ? " (insumo)" : ""}</option>`).join("")}
+      </select>
+      <label class="text-[10px] text-[#8a7d94]">Cantidad</label>
+      <input type="number" value="${it.cantidad}" onchange="cambiarItemPerdida(${i}, 'cantidad', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] outline-none" />
+      ${window.__perdidaItems.length > 1 ? `<button onclick="quitarItemPerdida(${i})" class="text-[11px] text-[#D64545] mt-2">Quitar</button>` : ""}
+    </div>
+  `).join("");
+ 
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Registrar pérdida</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Productos perdidos</label>
+    <div class="mt-2 mb-2">${filasHtml}</div>
+    <button onclick="agregarItemPerdida()" class="text-[12px] text-[#6B2D5C] font-semibold mb-4">+ Agregar otro producto</button>
+ 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Motivo (opcional)</label>
+    <input id="perdida-motivo" type="text" value="${window.__perdidaMotivo}" placeholder="Ej: se rompieron, vencieron..." class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
+ 
+    <button onclick="saveNuevaPerdida()" class="w-full bg-[#D64545] text-white font-semibold rounded-xl py-3">Registrar y descontar del stock</button>
+  `);
+}
+ 
+function cambiarItemPerdida(i, campo, valor) {
+  window.__perdidaItems[i][campo] = campo === "producto_id" ? Number(valor) : Number(valor);
+  renderNuevaPerdidaModal();
+}
+function agregarItemPerdida() {
+  const primero = productos.find((p) => !p.es_insumo) || productos[0];
+  window.__perdidaItems.push({ producto_id: primero?.id, cantidad: 1 });
+  renderNuevaPerdidaModal();
+}
+function quitarItemPerdida(i) {
+  window.__perdidaItems.splice(i, 1);
+  renderNuevaPerdidaModal();
+}
+ 
+async function saveNuevaPerdida() {
+  if (procesandoAccion) return;
+  const motivo = document.getElementById("perdida-motivo").value.trim();
+ 
+  // Validar que ningún producto quede en negativo
+  for (const it of window.__perdidaItems) {
+    const p = productos.find((pr) => pr.id === it.producto_id);
+    if (p && it.cantidad > p.stock) {
+      alert(`No hay suficiente stock de "${p.nombre}" para descontar. Disponible: ${p.stock}.`);
+      return;
+    }
+  }
+ 
+  procesandoAccion = true;
+  try {
+    const registrado_por = usuarios[0]?.nombre || "";
+    for (const it of window.__perdidaItems) {
+      const p = productos.find((pr) => pr.id === it.producto_id);
+      if (!p) continue;
+      await sb.from("productos").update({ stock: p.stock - it.cantidad }).eq("id", p.id);
+      await sb.from("perdidas").insert({ producto_id: p.id, cantidad: it.cantidad, motivo, costo_unitario: p.costo_ultimo, registrado_por });
+      await registrarHistorial("productos", p.id, "editar", `Pérdida registrada: −${it.cantidad} ${p.nombre}${motivo ? " (" + motivo + ")" : ""}`);
+    }
+    window.__perdidaItems = [];
+    closeModal();
+    await loadAll();
+    await irAPerdidas();
+  } finally {
+    procesandoAccion = false;
+  }
 }
  
 // ---------- Auditoría ----------
