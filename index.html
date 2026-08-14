@@ -2680,6 +2680,10 @@ function renderCompraModal() {
           <input type="number" value="${it.costo_unitario}" onchange="cambiarItemCompra(${i}, 'costo_unitario', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] outline-none" />
         </div>
       </div>
+      <div class="flex items-center justify-between mt-2 pt-2 border-t border-black/[0.06]">
+        <span class="text-[11px] text-[#8a7d94]">Subtotal de este producto</span>
+        <span class="font-mono-num text-[13px] font-semibold text-[#241C2E]">${fmt(it.cantidad * it.costo_unitario)}</span>
+      </div>
       ${factor > 1 ? `<p class="text-[10px] text-[#2F9E7A] mt-1.5">Suma ${it.cantidad * factor} al stock (${factor} por unidad)</p>` : ""}
       ${window.__compraItems.length > 1 ? `<button onclick="quitarItemCompra(${i})" class="text-[11px] text-[#D64545] mt-2">Quitar</button>` : ""}
     </div>
@@ -2841,7 +2845,18 @@ async function saveNewCompra() {
   if (error) { alert("No se pudo registrar la compra."); console.error(error); return; }
  
   const items = window.__compraItems.map((it) => ({ compra_id: compra.id, producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario }));
-  await sb.from("compra_items").insert(items);
+  const { error: itemsError } = await sb.from("compra_items").insert(items);
+  if (itemsError) {
+    alert("La compra se guardó, pero hubo un problema al guardar los productos. Abrí esta compra y volvé a cargarlos, o avisame para revisarlo.");
+    console.error(itemsError);
+    await registrarHistorial("compras", compra.id, "editar", `⚠ Se guardó la compra pero falló el guardado de productos — revisar`);
+    window.__compraItems = [];
+    closeModal();
+    await loadAll();
+    activeTab = "compras";
+    render();
+    return;
+  }
  
   // Actualizar stock y costo_ultimo. Si el producto tiene equivalencia_bolas (ej: balde de helado),
   // la cantidad comprada se convierte a la unidad en la que se controla el stock.
