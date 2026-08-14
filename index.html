@@ -1199,6 +1199,9 @@ async function deleteVenta(ventaId) {
 }
 
 async function deleteVentaSinConfirmar(ventaId) {
+  if (procesandoAccion) return;
+  procesandoAccion = true;
+  try {
 
   // Traer los ítems reales de la venta (por si el listado en pantalla no los tiene completos)
   const { data: items } = await sb.from("venta_items").select("producto_id, cantidad, productos(nombre)").eq("venta_id", ventaId);
@@ -1234,6 +1237,9 @@ async function deleteVentaSinConfirmar(ventaId) {
 
   await loadAll();
   if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
+  } finally {
+    procesandoAccion = false;
+  }
 }
 
 async function deleteRepartoCompartido(ventaId) {
@@ -1328,6 +1334,9 @@ function quitarItemEditVenta(i) {
 }
 
 async function saveEditVenta() {
+  if (procesandoAccion) return;
+  procesandoAccion = true;
+  try {
   const ventaId = window.__editVentaId;
   const cliente_id = window.__editVentaClienteId;
   const created_at = fechaOAhora(window.__editVentaFecha);
@@ -1392,6 +1401,9 @@ async function saveEditVenta() {
   await loadAll();
   if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
   else if (activeTab === "todas-ventas") await abrirTodasVentas();
+  } finally {
+    procesandoAccion = false;
+  }
 }
 
 function pagadoDeVenta(ventaId) {
@@ -1689,10 +1701,13 @@ async function crearClienteEditReparto() {
 }
 
 async function saveEditReparto() {
+  if (procesandoAccion) return;
   const ventaId = window.__editRepartoVentaId;
   const original = window.__editRepartoOriginal;
   const seleccion = [...window.__editRepartoSeleccion];
   if (seleccion.length < 2) { alert("Tiene que haber al menos 2 personas en una cuenta dividida."); return; }
+  procesandoAccion = true;
+  try {
 
   const total = original.reduce((s, r) => s + Number(r.monto), 0);
   const porPersonaBase = Math.floor(total / seleccion.length);
@@ -1733,6 +1748,9 @@ async function saveEditReparto() {
   await loadAll();
   if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
   else if (activeTab === "todas-ventas") await abrirTodasVentas();
+  } finally {
+    procesandoAccion = false;
+  }
 }
 
 function openCobroReparto(ventaId, pendiente) {
@@ -2628,9 +2646,14 @@ async function saveEditCategoria(id) {
 
 async function deleteCategoria(id) {
   const c = categorias.find((cc) => cc.id === id);
-  const enUso = productos.some((p) => p.categoria_id === id);
-  if (enUso) {
+  const enUsoProductos = productos.some((p) => p.categoria_id === id);
+  const enUsoPromo = promociones.some((pr) => pr.categoria_id === id);
+  if (enUsoProductos) {
     alert(`No podés eliminar "${c.nombre}" porque todavía hay productos usándola. Cambiales la categoría primero desde Inventario.`);
+    return;
+  }
+  if (enUsoPromo) {
+    alert(`No podés eliminar "${c.nombre}" porque hay una promoción usándola. Eliminá o cambiá esa promoción primero, en "Más → Promociones".`);
     return;
   }
   if (!confirm(`¿Eliminar la categoría "${c.nombre}"?`)) return;
@@ -2969,6 +2992,9 @@ async function saveNewCompra() {
 }
 
 async function saveEditCompra() {
+  if (procesandoAccion) return;
+  procesandoAccion = true;
+  try {
   const proveedor_id = Number(document.getElementById("compra-proveedor").value) || null;
   const tipo = document.getElementById("compra-tipo").value;
   const fecha = document.getElementById("compra-fecha").value;
@@ -3051,10 +3077,16 @@ async function saveEditCompra() {
   await loadAll();
   activeTab = "compras";
   render();
+  } finally {
+    procesandoAccion = false;
+  }
 }
 
 async function deleteCompra() {
   if (!confirm("¿Eliminar esta compra? Se va a descontar del stock lo que había sumado, y se devuelve el dinero a la caja.")) return;
+  if (procesandoAccion) return;
+  procesandoAccion = true;
+  try {
   for (const it of window.__originalCompraItems) {
     const p = productos.find((pr) => pr.id === it.producto_id);
     if (p) await sb.from("productos").update({ stock: p.stock - it.cantidad * factorConversion(p) }).eq("id", p.id);
@@ -3069,6 +3101,9 @@ async function deleteCompra() {
   await loadAll();
   activeTab = "compras";
   render();
+  } finally {
+    procesandoAccion = false;
+  }
 }
 
 function openVerCarrito() {
