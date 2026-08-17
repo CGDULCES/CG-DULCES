@@ -2739,6 +2739,7 @@ function openNewCompra() {
   window.__compraTipo = "mercaderia";
   window.__compraFecha = fechaLocalHoy();
   window.__compraDescuento = 0;
+  window.__compraProveedorId = proveedores[0]?.id || null;
   const primerProducto = productos.find((p) => !p.es_insumo);
   window.__compraItems = [{ producto_id: primerProducto?.id, cantidad: 1, costo_unitario: 0 }];
   renderCompraModal();
@@ -2754,6 +2755,7 @@ function openEditCompra(id) {
   window.__compraItems = (c.compra_items || []).map((it) => ({ id: it.id, producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario }));
   window.__originalCompraItems = JSON.parse(JSON.stringify(window.__compraItems));
   window.__editingProveedorId = c.proveedor_id;
+  window.__compraProveedorId = c.proveedor_id;
   window.__editingTipo = c.tipo;
   window.__medioPagoCompra = c.medio_pago || "efectivo";
   window.__mixtoCompraEfectivoInicial = Number(c.monto_efectivo) || 0;
@@ -2778,7 +2780,7 @@ function productosPorTipoCompra() {
 function renderCompraModal() {
   const editando = !!window.__editingCompraId;
   const medioPagoActual = window.__medioPagoCompra || "efectivo";
-  const opcionesProveedor = proveedores.map((p) => `<option value="${p.id}" ${editando && window.__editingProveedorId===p.id ? "selected":""}>${p.nombre}</option>`).join("");
+  const opcionesProveedor = proveedores.map((p) => `<option value="${p.id}" ${window.__compraProveedorId===p.id ? "selected":""}>${p.nombre}</option>`).join("");
   const subtotalCompra = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
   const descuentoCompra = window.__compraDescuento || 0;
   const total = Math.max(0, subtotalCompra - descuentoCompra);
@@ -2818,7 +2820,7 @@ function renderCompraModal() {
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Fecha de la compra</label>
     <input id="compra-fecha" type="date" value="${window.__compraFecha}" onchange="window.__compraFecha = this.value" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Proveedor</label>
-    <select id="compra-proveedor" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">${opcionesProveedor}</select>
+    <select id="compra-proveedor" onchange="window.__compraProveedorId = Number(this.value)" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">${opcionesProveedor}</select>
 
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Tipo</label>
     <select id="compra-tipo" onchange="cambiarTipoCompra(this.value)" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none">
