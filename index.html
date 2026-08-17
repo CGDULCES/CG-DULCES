@@ -2796,7 +2796,7 @@ function renderCompraModal() {
       <div class="grid grid-cols-2 gap-2">
         <div>
           <label class="text-[10px] text-[#8a7d94]">Cantidad</label>
-          <input type="number" value="${it.cantidad}" onchange="cambiarItemCompra(${i}, 'cantidad', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] outline-none" />
+          <input type="number" step="any" value="${it.cantidad}" onchange="cambiarItemCompra(${i}, 'cantidad', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] outline-none" />
         </div>
         <div>
           <label class="text-[10px] text-[#8a7d94]">Costo c/u</label>
@@ -3703,7 +3703,7 @@ async function openEditProduct(id) {
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">${esConsumibleIlimitado ? `Paquetes sin abrir` : "Stock actual"}</label>
-          <input id="edit-stock" type="number" value="${p.stock}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+          <input id="edit-stock" type="number" step="any" value="${p.stock}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
         </div>
         <div>
           <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Stock mínimo</label>
@@ -3780,7 +3780,7 @@ function agregarFilaReceta(productoTerminadoId) {
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Insumo</label>
     <select id="receta-insumo" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">${opciones}</select>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cantidad que lleva por cada 1 unidad producida</label>
-    <input id="receta-cantidad" type="number" value="1" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
+    <input id="receta-cantidad" type="number" step="any" value="1" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
     <button onclick="saveFilaReceta(${productoTerminadoId})" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Agregar a la receta</button>
   `);
 }
