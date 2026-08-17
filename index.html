@@ -2905,21 +2905,31 @@ function factorConversion(p) {
 
 // Consumo ilimitado reutilizable: mientras el paquete/balde esté abierto, no hay tope.
 // Si no hay ninguno abierto, exige que haya al menos 1 en stock para "abrirlo".
-function validarConsumoIlimitado(producto, necesario) {
+async function validarConsumoIlimitado(producto, necesario) {
   if (!producto || necesario === 0) return { ok: true };
-  if (Number(producto.bolas_vendidas_actual || 0) === 0 && Number(producto.stock) <= 0) {
+  const { data: fresco } = await sb.from("productos").select("stock, bolas_vendidas_actual").eq("id", producto.id).single();
+  const actual = Number(fresco?.bolas_vendidas_actual || 0);
+  const stockActual = Number(fresco?.stock ?? producto.stock);
+  if (actual === 0 && stockActual <= 0) {
     return { ok: false, mensaje: `No hay más "${producto.presentacion || producto.nombre}" disponible. Comprá o reponé el insumo antes de usarlo.` };
   }
   return { ok: true };
 }
 async function aplicarConsumoIlimitado(producto, cantidadNecesaria) {
   if (!producto || cantidadNecesaria === 0) return;
-  const actual = Number(producto.bolas_vendidas_actual || 0);
+  // Se trae el valor fresco de la base justo antes de decidir, para que dos ventas casi
+  // simultáneas (o desde dos dispositivos) no "abran" el mismo paquete dos veces por error.
+  const { data: fresco, error: errorLectura } = await sb.from("productos").select("stock, bolas_vendidas_actual").eq("id", producto.id).single();
+  if (errorLectura) { console.error("No se pudo leer el estado actual de", producto.nombre, errorLectura); return; }
+  const actual = Number(fresco?.bolas_vendidas_actual || 0);
+  const stockActual = Number(fresco?.stock ?? producto.stock);
+  let resultado;
   if (actual === 0) {
-    await sb.from("productos").update({ stock: producto.stock - 1, bolas_vendidas_actual: cantidadNecesaria }).eq("id", producto.id);
+    resultado = await sb.from("productos").update({ stock: stockActual - 1, bolas_vendidas_actual: cantidadNecesaria }).eq("id", producto.id);
   } else {
-    await sb.from("productos").update({ bolas_vendidas_actual: actual + cantidadNecesaria }).eq("id", producto.id);
+    resultado = await sb.from("productos").update({ bolas_vendidas_actual: actual + cantidadNecesaria }).eq("id", producto.id);
   }
+  if (resultado.error) console.error("No se pudo actualizar el consumo de", producto.nombre, resultado.error);
 }
 
 async function saveNewCompra() {
@@ -3532,18 +3542,18 @@ async function confirmSale() {
       if (p && necesario > p.stock) { alert(`No hay suficiente stock de "${p.nombre}". Disponible: ${p.stock}, necesitás ${necesario}.`); return; }
     }
     // Baldes, cucharita, servilleta y cobertura (por sabor): uso ilimitado mientras haya un paquete/balde abierto
-    const validarIlimitado = (producto, necesario) => {
-      const r = validarConsumoIlimitado(producto, necesario);
+    const validarIlimitado = async (producto, necesario) => {
+      const r = await validarConsumoIlimitado(producto, necesario);
       if (!r.ok) alert(r.mensaje);
       return r.ok;
     };
     for (const saborId of Object.keys(bolasPorBalde)) {
-      if (!validarIlimitado(productos.find((pr) => pr.id === Number(saborId)), bolasPorBalde[saborId])) return;
+      if (!(await validarIlimitado(productos.find((pr) => pr.id === Number(saborId)), bolasPorBalde[saborId]))) return;
     }
-    if (!validarIlimitado(cucharita, cucharitaNecesario)) return;
-    if (!validarIlimitado(servilleta, servilletaNecesario)) return;
+    if (!(await validarIlimitado(cucharita, cucharitaNecesario))) return;
+    if (!(await validarIlimitado(servilleta, servilletaNecesario))) return;
     for (const saborId of Object.keys(coberturaPorSabor)) {
-      if (!validarIlimitado(productos.find((pr) => pr.id === Number(saborId)), coberturaPorSabor[saborId])) return;
+      if (!(await validarIlimitado(productos.find((pr) => pr.id === Number(saborId)), coberturaPorSabor[saborId]))) return;
     }
   }
 
@@ -3861,7 +3871,7 @@ async function cargarHielo() {
   const hielo = productos.find((p) => p.nombre === "Hielo · Bolsa");
   if (!bolsita || !hielo) { alert("Falta cargar 'Bolsita de Hielo' o 'Hielo · Bolsa' en productos."); return; }
 
-  const check = validarConsumoIlimitado(bolsita, cantidad);
+  const check = await validarConsumoIlimitado(bolsita, cantidad);
   if (!check.ok) { alert(check.mensaje); return; }
 
   await aplicarConsumoIlimitado(bolsita, cantidad);
