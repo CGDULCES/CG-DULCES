@@ -114,6 +114,7 @@ const HELADOS_OCULTO = "Helados"; // se habilita en la próxima etapa
 let categorias = [];
 let productos = [];
 let promociones = [];
+let recetas = [];
 let usuarios = [];
 let ventasHistoricas = [];
 let proveedores = [];
@@ -165,8 +166,14 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
 
 // ---------- Carga de datos ----------
 async function loadAll() {
-  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras(), loadClientes(), loadVentasClientes(), loadCobros(), loadCaja(), loadHistorial(), loadRepartosClientes()]);
+  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras(), loadClientes(), loadVentasClientes(), loadCobros(), loadCaja(), loadHistorial(), loadRepartosClientes(), loadRecetas()]);
   render();
+}
+
+async function loadRecetas() {
+  const { data, error } = await sb.from("recetas").select("*");
+  if (error) { console.error(error); return; }
+  recetas = data;
 }
 
 async function loadRepartosClientes() {
@@ -502,14 +509,18 @@ function renderDashboard(content) {
         ${sectionLabel("Últimas ventas")}
         <div class="space-y-3">
           ${recientes.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Todavía no hay ventas registradas.</p>` :
-            recientes.map((v) => `
+            recientes.map((v) => {
+              const pagadoDeEsta = cobros.filter((c) => c.venta_id === v.id).reduce((s, c) => s + Number(c.monto), 0);
+              const siguePendiente = v.es_fiado && pagadoDeEsta < Number(v.total);
+              return `
             <div class="flex items-center justify-between gap-3">
               <div class="min-w-0">
                 <p class="text-[13px] text-[#241C2E] truncate">${(v.venta_items||[]).map(it=>`${it.cantidad}× ${it.productos?.nombre||""}`).join(", ")}</p>
-                <p class="text-[11px] text-[#8a7d94]">${new Date(v.created_at).toLocaleTimeString("es-PY",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})} · ${v.registrado_por || ""}${v.es_fiado ? ` · <span class="text-[#D64545] font-semibold">Fiado, pendiente</span>` : ""}</p>
+                <p class="text-[11px] text-[#8a7d94]">${new Date(v.created_at).toLocaleTimeString("es-PY",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})} · ${v.registrado_por || ""}${siguePendiente ? ` · <span class="text-[#D64545] font-semibold">Fiado, pendiente</span>` : v.es_fiado ? ` · <span class="text-[#2F9E7A] font-semibold">Fiado, ya cobrado</span>` : ""}</p>
               </div>
-              <span class="font-mono-num text-[13px] font-semibold shrink-0 ${v.es_fiado ? "text-[#8a7d94]" : ""}">${fmt(v.total)}</span>
-            </div>`).join("")}
+              <span class="font-mono-num text-[13px] font-semibold shrink-0 ${siguePendiente ? "text-[#8a7d94]" : ""}">${fmt(v.total)}</span>
+            </div>`;
+            }).join("")}
         </div>
         <button onclick="abrirTodasVentas()" class="w-full text-center text-[12px] text-[#6B2D5C] font-semibold mt-3 pt-3 border-t border-black/[0.06]">Ver todas las ventas ›</button>
       </div>
@@ -2319,6 +2330,8 @@ function renderTodasVentas(content) {
           const itemsTexto = (v.venta_items || []).map((it) => `${it.cantidad}× ${it.productos?.nombre || ""}`).join(", ");
           const esDividida = (v.venta_repartos || []).length > 0;
           const participantes = esDividida ? v.venta_repartos.map((r) => r.clientes?.nombre || "").join(", ") : "";
+          const pagadoDeEsta = cobros.filter((c) => c.venta_id === v.id).reduce((s, c) => s + Number(c.monto), 0);
+          const estadoTexto = !v.es_fiado ? v.medio_pago : (pagadoDeEsta < Number(v.total) ? "Fiado, pendiente" : "Fiado, cobrado");
           return `
           <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
             <div class="flex items-center justify-between mb-1">
@@ -2328,7 +2341,7 @@ function renderTodasVentas(content) {
             <p class="text-[13px] text-[#241C2E]">${itemsTexto}</p>
             ${esDividida ? `<p class="text-[11px] text-[#6B2D5C] mt-1">👥 Dividida entre: ${participantes}</p>` : ""}
             <div class="flex items-center justify-between mt-1.5">
-              <span class="text-[11px] text-[#8a7d94]">${v.es_fiado ? "Fiado" : v.medio_pago} · ${v.registrado_por || ""}</span>
+              <span class="text-[11px] ${v.es_fiado && pagadoDeEsta < Number(v.total) ? 'text-[#D64545] font-semibold' : 'text-[#8a7d94]'}">${estadoTexto} · ${v.registrado_por || ""}</span>
               <div class="flex items-center gap-3">
                 ${esDividida
                   ? `<button onclick="openEditReparto(${v.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar división</button>`
@@ -3726,25 +3739,106 @@ async function openEditProduct(id) {
     </div>` : ""}
     ${p.es_fabricado && !esConsumibleIlimitado && p.nombre !== "Hielo · Bolsa" && !["Helado · Bola", "Helado · Pote 1/4"].includes(p.nombre) ? `
     <div class="bg-[#F7F3FA] rounded-xl p-3 mt-3">
-      <p class="text-[12px] font-semibold text-[#241C2E] mb-2">Registrar producción</p>
-      <p class="text-[11px] text-[#8a7d94] mb-2">Sumá al stock lo que acabás de preparar.</p>
+      <p class="text-[12px] font-semibold text-[#241C2E] mb-2">Receta (por cada 1 unidad producida)</p>
+      <div id="receta-lista-${p.id}">${renderRecetaLista(p.id)}</div>
+      <button onclick="agregarFilaReceta(${p.id})" class="text-[11px] text-[#6B2D5C] font-semibold mt-1 mb-3">+ Agregar insumo a la receta</button>
+
+      <p class="text-[12px] font-semibold text-[#241C2E] mb-2 pt-2 border-t border-black/[0.06]">Registrar producción</p>
+      <p class="text-[11px] text-[#8a7d94] mb-2">Descuenta los insumos de la receta y suma al stock del producto.</p>
       <div class="flex items-center gap-2">
         <input id="fabricar-cantidad" type="number" value="1" class="flex-1 bg-white rounded-lg px-3 py-2 text-[14px] outline-none" />
-        <button onclick="registrarProduccion(${p.id})" class="bg-[#6B2D5C] text-white text-[12px] font-semibold px-3 py-2 rounded-lg">Agregar</button>
+        <button onclick="registrarProduccion(${p.id})" class="bg-[#6B2D5C] text-white text-[12px] font-semibold px-3 py-2 rounded-lg">Producir</button>
       </div>
     </div>` : ""}
     <button onclick="deleteProduct(${p.id})" class="w-full text-[#D64545] text-[13px] font-semibold py-3 mt-1">Eliminar producto</button>
   `);
 }
 
+function renderRecetaLista(productoTerminadoId) {
+  const filas = recetas.filter((r) => r.producto_terminado_id === productoTerminadoId);
+  const insumosDisponibles = productos.filter((p) => p.es_insumo);
+  if (filas.length === 0) return `<p class="text-[11px] text-[#8a7d94] mb-2">Todavía no cargaste ningún insumo en la receta.</p>`;
+  return filas.map((r) => {
+    const insumo = productos.find((p) => p.id === r.insumo_id);
+    return `
+    <div class="flex items-center justify-between bg-white rounded-lg px-2.5 py-2 mb-1.5">
+      <span class="text-[12px] text-[#241C2E]">${insumo?.nombre || "?"}</span>
+      <div class="flex items-center gap-2">
+        <span class="font-mono-num text-[12px] text-[#8a7d94]">${r.cantidad}</span>
+        <button onclick="quitarFilaReceta(${r.id}, ${productoTerminadoId})" class="text-[#D64545] text-[13px] leading-none">×</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function agregarFilaReceta(productoTerminadoId) {
+  const insumosDisponibles = productos.filter((p) => p.es_insumo);
+  if (insumosDisponibles.length === 0) { alert("Primero cargá al menos un insumo en Inventario (marcado como 'Es un insumo')."); return; }
+  const opciones = insumosDisponibles.map((p) => `<option value="${p.id}">${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</option>`).join("");
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Agregar insumo a la receta</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Insumo</label>
+    <select id="receta-insumo" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">${opciones}</select>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cantidad que lleva por cada 1 unidad producida</label>
+    <input id="receta-cantidad" type="number" value="1" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
+    <button onclick="saveFilaReceta(${productoTerminadoId})" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Agregar a la receta</button>
+  `);
+}
+
+async function saveFilaReceta(productoTerminadoId) {
+  const insumo_id = Number(document.getElementById("receta-insumo").value);
+  const cantidad = Number(document.getElementById("receta-cantidad").value) || 0;
+  if (cantidad <= 0) { alert("Poné una cantidad."); return; }
+  const { error } = await sb.from("recetas").insert({ producto_terminado_id: productoTerminadoId, insumo_id, cantidad });
+  if (error) { alert("No se pudo agregar."); console.error(error); return; }
+  await loadAll();
+  openEditProduct(productoTerminadoId);
+}
+
+async function quitarFilaReceta(recetaId, productoTerminadoId) {
+  await sb.from("recetas").delete().eq("id", recetaId);
+  await loadAll();
+  openEditProduct(productoTerminadoId);
+}
+
 async function registrarProduccion(id) {
+  if (procesandoAccion) return;
   const cantidad = Number(document.getElementById("fabricar-cantidad").value) || 0;
   if (cantidad <= 0) return;
   const p = productos.find((pr) => pr.id === id);
-  await sb.from("productos").update({ stock: p.stock + cantidad }).eq("id", id);
-  await registrarHistorial("productos", id, "editar", `Producción registrada: +${cantidad} ${p.nombre}`);
-  closeModal();
-  await loadAll();
+  const recetaDeEste = recetas.filter((r) => r.producto_terminado_id === id);
+
+  if (recetaDeEste.length === 0) {
+    if (!confirm("Este producto no tiene ninguna receta cargada, así que no se va a descontar ningún insumo — solo se va a sumar al stock. ¿Continuar igual?")) return;
+  } else {
+    // Validar que haya suficiente de cada insumo antes de tocar nada
+    for (const r of recetaDeEste) {
+      const insumo = productos.find((pr) => pr.id === r.insumo_id);
+      const necesario = r.cantidad * cantidad;
+      if (insumo && necesario > insumo.stock) {
+        alert(`No hay suficiente "${insumo.nombre}" para producir ${cantidad}. Necesitás ${necesario}, hay ${insumo.stock}.`);
+        return;
+      }
+    }
+  }
+
+  procesandoAccion = true;
+  try {
+    for (const r of recetaDeEste) {
+      const insumo = productos.find((pr) => pr.id === r.insumo_id);
+      if (insumo) await sb.from("productos").update({ stock: insumo.stock - r.cantidad * cantidad }).eq("id", insumo.id);
+    }
+    await sb.from("productos").update({ stock: p.stock + cantidad }).eq("id", id);
+    const detalleReceta = recetaDeEste.map((r) => {
+      const insumo = productos.find((pr) => pr.id === r.insumo_id);
+      return `${insumo?.nombre || "?"} −${r.cantidad * cantidad}`;
+    }).join(", ");
+    await registrarHistorial("productos", id, "editar", `Producción registrada: +${cantidad} ${p.nombre}${detalleReceta ? ` (consumió: ${detalleReceta})` : " (sin receta cargada)"}`);
+    closeModal();
+    await loadAll();
+  } finally {
+    procesandoAccion = false;
+  }
 }
 
 async function marcarConsumibleTerminado(id) {
