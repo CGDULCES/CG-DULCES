@@ -126,6 +126,7 @@ let historial = [];
 let ventasClientes = [];
 let cobros = [];
 let cart = {};
+let pajitasCart = {}; // { productoId: cantidadDePajitas }
 let heladoCart = []; // ventas armadas de helado: { id, tipo: 'bola'|'pote14', bolas: [productoId,...], envaseId, cobertura, total }
 let repartosClientes = []; // todas las cuentas compartidas, para calcular deuda de cualquier cliente
 let activeTab = "dashboard";
@@ -908,6 +909,7 @@ function renderTarjetaProducto(p, cat) {
   const color = categoryColors[cat] || "#6B2D5C";
   const promo = promoParaProducto(p);
   const promoActiva = promo && cantidadGrupoEnCarrito(promo) >= promo.cantidad_requerida;
+  const pajitas = pajitasCart[p.id] || 0;
   return `
   <div class="bg-white rounded-2xl p-3.5 shadow-sm border border-black/[0.04] flex flex-col gap-2">
     <div class="flex items-center gap-1.5">
@@ -922,6 +924,19 @@ function renderTarjetaProducto(p, cat) {
       <span class="font-mono-num text-[14px] font-semibold w-6 text-center">${qty}</span>
       <button onclick="changeQty(${p.id}, 1)" class="w-7 h-7 rounded-full bg-[#6B2D5C] text-white flex items-center justify-center" ${qty>=p.stock?"disabled style='opacity:.3'":""}>+</button>
     </div>
+    ${p.usa_pajita && qty > 0 ? `
+    <div class="border-t border-black/[0.06] pt-2 mt-1">
+      <label class="flex items-center gap-1.5 mb-1.5">
+        <input type="checkbox" onchange="togglePajita(${p.id}, this.checked, ${qty})" ${pajitas > 0 ? "checked" : ""} class="w-3.5 h-3.5" />
+        <span class="text-[11px] text-[#241C2E]">🥤 Con pajita</span>
+      </label>
+      ${pajitas > 0 ? `
+      <div class="flex items-center justify-center gap-2">
+        <button onclick="changePajitaCantidad(${p.id}, -1)" class="w-5 h-5 rounded-full bg-[#F7F3FA] flex items-center justify-center text-[11px]">−</button>
+        <span class="font-mono-num text-[11px] font-semibold w-4 text-center">${pajitas}</span>
+        <button onclick="changePajitaCantidad(${p.id}, 1)" class="w-5 h-5 rounded-full bg-[#6B2D5C] text-white flex items-center justify-center text-[11px]">+</button>
+      </div>` : ""}
+    </div>` : ""}
   </div>`;
 }
 
@@ -3351,6 +3366,19 @@ function changeQty(id, delta) {
   const p = productos.find((pr) => pr.id === id);
   const current = cart[id] || 0;
   cart[id] = Math.max(0, Math.min(p.stock, current + delta));
+  if (cart[id] === 0) delete pajitasCart[id];
+  render();
+}
+
+function togglePajita(id, checked, qty) {
+  if (checked) pajitasCart[id] = qty;
+  else delete pajitasCart[id];
+  render();
+}
+function changePajitaCantidad(id, delta) {
+  const actual = pajitasCart[id] || 0;
+  const nueva = Math.max(1, actual + delta);
+  pajitasCart[id] = nueva;
   render();
 }
 
@@ -3520,6 +3548,15 @@ async function confirmSale() {
     const p = productos.find((pr) => pr.id === Number(id));
     if (qty > p.stock) { alert(`No hay suficiente stock de "${p.nombre}". Disponible: ${p.stock}.`); return; }
   }
+
+  // Pajitas: uso ilimitado mientras haya un paquete abierto (igual que cucharita/servilleta)
+  const totalPajitas = items.reduce((s, [id, qty]) => s + (pajitasCart[Number(id)] || 0), 0);
+  if (totalPajitas > 0) {
+    const pajita = insumoPorNombre("Pajita");
+    const checkPajita = await validarConsumoIlimitado(pajita, totalPajitas);
+    if (!checkPajita.ok) { alert(checkPajita.mensaje); return; }
+  }
+
   if (heladoCart.length > 0) {
     const necesarioPorId = {};
     const bolasPorBalde = {};
@@ -3618,6 +3655,11 @@ async function confirmSale() {
     await sb.from("productos").update({ stock: p.stock - qty }).eq("id", p.id);
   }
 
+  // Pajitas de todos los productos que las llevan, en esta venta
+  if (totalPajitas > 0) {
+    await aplicarConsumoIlimitado(insumoPorNombre("Pajita"), totalPajitas);
+  }
+
   // Descontar insumos de cada helado armado
   const cucharita = insumoPorNombre("Cucharita");
   const servilleta = insumoPorNombre("Servilleta");
@@ -3663,6 +3705,7 @@ async function confirmSale() {
   await registrarHistorial("ventas", venta.id, "crear", `Venta de ${fmt(total)} por ${registrado_por}${es_fiado ? " (fiado)" : ""}${cliente_id ? " a " + (clientes.find((c) => c.id === cliente_id)?.nombre || "cliente") : ""}`);
 
   cart = {};
+  pajitasCart = {};
   heladoCart = [];
   closeModal();
   activeTab = "dashboard";
@@ -3680,7 +3723,7 @@ async function openEditProduct(id) {
   const opcionesCategoria = categorias.map((c) => `<option value="${c.id}" ${c.id===p.categoria_id?"selected":""}>${c.nombre}</option>`).join("");
   const esBaldeHelado = p.producto_base === "Balde Helado";
   const esCoberturaHelado = p.producto_base === "Cobertura";
-  const CONSUMIBLES_ILIMITADOS = ["Servilleta", "Cucharita", "Bolsita de Hielo"];
+  const CONSUMIBLES_ILIMITADOS = ["Servilleta", "Cucharita", "Bolsita de Hielo", "Pajita"];
   const esConsumibleIlimitado = esBaldeHelado || esCoberturaHelado || CONSUMIBLES_ILIMITADOS.includes(p.nombre);
   const etiquetaUnidad = esBaldeHelado ? "bolas" : "usos";
   const etiquetaPaquete = esBaldeHelado ? "balde" : "paquete";
@@ -3711,6 +3754,10 @@ async function openEditProduct(id) {
       <label class="flex items-center gap-2">
         <input type="checkbox" id="edit-favorito" ${p.favorito ? "checked" : ""} class="w-4 h-4" />
         <span class="text-[13px] text-[#241C2E]">⭐ Favorito (venta rápida)</span>
+      </label>
+      <label class="flex items-center gap-2">
+        <input type="checkbox" id="edit-usa-pajita" ${p.usa_pajita ? "checked" : ""} class="w-4 h-4" />
+        <span class="text-[13px] text-[#241C2E]">🥤 Ofrecer pajita al vender esto</span>
       </label>
       <div class="grid grid-cols-2 gap-3">
         <div>
@@ -3889,13 +3936,14 @@ async function saveEditProduct(id) {
   const presentacion = document.getElementById("edit-presentacion").value.trim() || null;
   const es_insumo = document.getElementById("edit-es-insumo").checked;
   const favorito = document.getElementById("edit-favorito").checked;
+  const usa_pajita = document.getElementById("edit-usa-pajita").checked;
   const stock = Number(document.getElementById("edit-stock").value);
   if (stock < 0) { alert("El stock no puede quedar en negativo."); return; }
   const stock_minimo = Number(document.getElementById("edit-minimo").value);
   const precio_venta = Number(document.getElementById("edit-precio").value);
   const costo_ultimo = Number(document.getElementById("edit-costo").value);
   const anterior = productos.find((p) => p.id === id);
-  const { error } = await sb.from("productos").update({ nombre, categoria_id, presentacion, es_insumo, favorito, stock, stock_minimo, precio_venta, costo_ultimo }).eq("id", id);
+  const { error } = await sb.from("productos").update({ nombre, categoria_id, presentacion, es_insumo, favorito, usa_pajita, stock, stock_minimo, precio_venta, costo_ultimo }).eq("id", id);
   if (error) { alert("No se pudo guardar."); console.error(error); return; }
   const cambioStock = anterior && anterior.stock !== stock ? ` (stock ${anterior.stock} → ${stock})` : "";
   await registrarHistorial("productos", id, "editar", `Editado: ${nombre}${cambioStock}`);
