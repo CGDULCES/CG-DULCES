@@ -1521,7 +1521,13 @@ function renderClienteDetalle(content) {
       ${pagosSinVenta > 0 ? `<p class="text-[11px] text-[#8a7d94] mt-1">Aparte, hay ${fmt(pagosSinVenta)} en pagos viejos sin venta asociada (no están descontados de este total)</p>` : ""}
     </div>
 
-    ${sectionLabel("Historial de compras")}
+    <div class="flex items-center justify-between mb-2">
+      ${sectionLabel("Historial de compras")}
+      ${ventas.some((v) => v.es_fiado && Math.max(0, v.total - pagadoDeVenta(v.id)) > 0) ? `
+      <button onclick="toggleSeleccionarTodasDeudas()" class="text-[11px] text-[#6B2D5C] font-semibold mb-2">
+        ${todasLasPendientesSeleccionadas(ventas) ? "Deseleccionar todas" : "Seleccionar todas las deudas"}
+      </button>` : ""}
+    </div>
     <div class="space-y-2 mb-4">
       ${ventas.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">Todavía no tiene compras registradas.</p>` :
         ventas.map((v) => {
@@ -1611,6 +1617,23 @@ function renderClienteDetalle(content) {
 function toggleSeleccionVenta(ventaId, checked) {
   if (checked) window.__clienteSeleccionadas.add(ventaId);
   else window.__clienteSeleccionadas.delete(ventaId);
+  render();
+}
+
+function ventasPendientesDe(ventas) {
+  return ventas.filter((v) => v.es_fiado && Math.max(0, v.total - pagadoDeVenta(v.id)) > 0).map((v) => v.id);
+}
+function todasLasPendientesSeleccionadas(ventas) {
+  const pendientes = ventasPendientesDe(ventas);
+  return pendientes.length > 0 && pendientes.every((id) => window.__clienteSeleccionadas.has(id));
+}
+function toggleSeleccionarTodasDeudas() {
+  const pendientes = ventasPendientesDe(window.__clienteDetalleVentas);
+  if (todasLasPendientesSeleccionadas(window.__clienteDetalleVentas)) {
+    pendientes.forEach((id) => window.__clienteSeleccionadas.delete(id));
+  } else {
+    pendientes.forEach((id) => window.__clienteSeleccionadas.add(id));
+  }
   render();
 }
 
@@ -3571,7 +3594,7 @@ async function confirmSale() {
       h.bolas.forEach((saborId) => { bolasPorBalde[saborId] = (bolasPorBalde[saborId] || 0) + 1; });
       if (h.tipo === "bola" && h.envaseId) sumarNecesario(h.envaseId, 1);
       if (h.tipo === "pote14" && poteIsopor) sumarNecesario(poteIsopor.id, 1);
-      if (h.tipo === "bola" && vasito && h.envaseId === vasito.id) cucharitaNecesario += 1;
+      if ((h.tipo === "bola" && vasito && h.envaseId === vasito.id) || h.tipo === "pote14") cucharitaNecesario += 1;
       if (h.servilleta) servilletaNecesario += 1;
       if (h.cobertura && h.coberturaId) coberturaPorSabor[h.coberturaId] = (coberturaPorSabor[h.coberturaId] || 0) + 1;
     });
@@ -3674,7 +3697,7 @@ async function confirmSale() {
 
   // Cucharita (solo helados en vasito) y servilleta (según se eligió): ilimitados
   const vasitoDesc = insumoPorNombre("Vasito");
-  const cucharitaTotal = heladoCart.filter((h) => h.tipo === "bola" && vasitoDesc && h.envaseId === vasitoDesc.id).length;
+  const cucharitaTotal = heladoCart.filter((h) => (h.tipo === "bola" && vasitoDesc && h.envaseId === vasitoDesc.id) || h.tipo === "pote14").length;
   const servilletaTotal = heladoCart.filter((h) => h.servilleta).length;
   await aplicarConsumoIlimitado(cucharita, cucharitaTotal);
   await aplicarConsumoIlimitado(servilleta, servilletaTotal);
