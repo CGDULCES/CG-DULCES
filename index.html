@@ -785,7 +785,7 @@ function renderDividirCuentaModal() {
 
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Producto</label>
     <select id="div-producto" onchange="cambiarProductoDivCuenta(this.value)" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">
-      ${productos_.map((p) => `<option value="${p.id}" ${p.id===window.__divCuentaProductoId?"selected":""}>${p.nombre}</option>`).join("")}
+      ${productos_.map((p) => `<option value="${p.id}" ${p.id===window.__divCuentaProductoId?"selected":""}>${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</option>`).join("")}
     </select>
 
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cantidad</label>
