@@ -2277,13 +2277,46 @@ async function renderConfiguracion(content) {
     </div>
 
     ${sectionLabel("Seguridad")}
-    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
       <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cambiar contraseña de acceso</label>
       <input id="config-password-nueva" type="password" placeholder="Nueva contraseña" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
       <button onclick="cambiarPassword()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Cambiar contraseña</button>
       <p class="text-[11px] text-[#8a7d94] mt-2">Para cambiar el nombre de usuario con el que entrás, avisame y lo ajustamos juntas en Supabase.</p>
     </div>
+
+    ${sectionLabel("Copia de seguridad")}
+    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+      <p class="text-[11px] text-[#8a7d94] mb-3">Descarga un archivo con todos tus datos (productos, ventas, compras, clientes, etc.) por si alguna vez necesitás recuperar algo. Guardalo en tu celular o compu de vez en cuando.</p>
+      <button id="btn-backup" onclick="descargarBackup()" class="w-full bg-[#241C2E] text-white font-semibold rounded-xl py-3">Descargar copia de seguridad</button>
+    </div>
   `;
+}
+
+async function descargarBackup() {
+  const btn = document.getElementById("btn-backup");
+  btn.textContent = "Preparando...";
+  btn.disabled = true;
+  try {
+    const tablas = ["productos", "categorias", "clientes", "proveedores", "promociones", "ventas", "venta_items", "cobros", "compras", "compra_items", "caja", "caja_movimientos", "historial", "usuarios_app", "venta_repartos", "helado_rendimientos", "perdidas", "recetas", "configuracion"];
+    const backup = { fecha: new Date().toISOString(), datos: {} };
+    for (const t of tablas) {
+      const { data } = await sb.from(t).select("*");
+      backup.datos[t] = data || [];
+    }
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `backup-cgdulces-${fechaLocalHoy()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert("No se pudo generar la copia. Probá de nuevo.");
+    console.error(e);
+  } finally {
+    btn.textContent = "Descargar copia de seguridad";
+    btn.disabled = false;
+  }
 }
 
 async function agregarUsuarioApp() {
