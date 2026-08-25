@@ -2749,6 +2749,91 @@ async function deleteCategoria(id) {
   render();
 }
 
+// ---------- Auditoría de un producto (stock: compras, ventas, pérdidas) ----------
+async function auditarProducto(productoId) {
+  closeModal();
+  const p = productos.find((pr) => pr.id === productoId);
+
+  const [{ data: comprasDe }, { data: ventasDe }, { data: perdidasDe }] = await Promise.all([
+    sb.from("compra_items").select("cantidad, costo_unitario, compras(id, created_at, proveedores(nombre))").eq("producto_id", productoId),
+    sb.from("venta_items").select("cantidad, ventas(id, created_at, es_fiado, clientes(nombre))").eq("producto_id", productoId),
+    sb.from("perdidas").select("cantidad, motivo, created_at").eq("producto_id", productoId),
+  ]);
+
+  const factor = factorConversion(p);
+  const movimientos = [];
+  (comprasDe || []).forEach((c) => {
+    if (!c.compras) return; // la compra fue eliminada; ya no cuenta
+    movimientos.push({ tipo: "compra", fecha: c.compras.created_at, cantidad: c.cantidad * factor, detalle: c.compras.proveedores?.nombre || "sin proveedor" });
+  });
+  (ventasDe || []).forEach((v) => {
+    if (!v.ventas) return; // la venta fue eliminada; ya no cuenta
+    movimientos.push({ tipo: "venta", fecha: v.ventas.created_at, cantidad: -v.cantidad, detalle: v.ventas.clientes?.nombre ? `a ${v.ventas.clientes.nombre}` : (v.ventas.es_fiado ? "fiado" : "") });
+  });
+  (perdidasDe || []).forEach((pe) => {
+    movimientos.push({ tipo: "pérdida", fecha: pe.created_at, cantidad: -pe.cantidad, detalle: pe.motivo || "" });
+  });
+  movimientos.sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+
+  const totalComprado = movimientos.filter((m) => m.tipo === "compra").reduce((s, m) => s + m.cantidad, 0);
+  const totalVendido = -movimientos.filter((m) => m.tipo === "venta").reduce((s, m) => s + m.cantidad, 0);
+  const totalPerdido = -movimientos.filter((m) => m.tipo === "pérdida").reduce((s, m) => s + m.cantidad, 0);
+  const stockEsperado = totalComprado - totalVendido - totalPerdido;
+  const diferencia = Number(p.stock) - stockEsperado;
+
+  let corrida = 0;
+  const filasHtml = movimientos.map((m) => {
+    corrida += m.cantidad;
+    const color = m.tipo === "compra" ? "#2F9E7A" : m.tipo === "venta" ? "#D64545" : "#8a7d94";
+    const TIPO_LABEL = { compra: "Compra", venta: "Venta", "pérdida": "Pérdida" };
+    return `
+      <div class="bg-white rounded-xl p-3 shadow-sm border border-black/[0.04] mb-2">
+        <div class="flex items-center justify-between">
+          <span class="text-[12px] font-semibold text-[#241C2E]">${TIPO_LABEL[m.tipo]}${m.detalle ? " · " + m.detalle : ""}</span>
+          <span class="font-mono-num text-[12px] font-semibold" style="color:${color}">${m.cantidad>0?"+":""}${m.cantidad}</span>
+        </div>
+        <p class="text-[10px] text-[#8a7d94]">${new Date(m.fecha).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}</p>
+        <p class="text-[9px] text-[#8a7d94] mt-0.5">Acumulado esperado: ${corrida}</p>
+      </div>`;
+  }).join("");
+
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Auditoría: ${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</p>
+    <p class="text-[11px] text-[#8a7d94] mb-4">Recalculado desde cero: compras − ventas − pérdidas de este producto</p>
+
+    <div class="grid grid-cols-2 gap-2 mb-3">
+      <div class="bg-[#F7F3FA] rounded-xl p-3">
+        <p class="text-[10px] text-[#8a7d94]">Comprado (total)</p>
+        <p class="font-mono-num text-[15px] font-semibold text-[#2F9E7A]">+${totalComprado}</p>
+      </div>
+      <div class="bg-[#F7F3FA] rounded-xl p-3">
+        <p class="text-[10px] text-[#8a7d94]">Vendido (total)</p>
+        <p class="font-mono-num text-[15px] font-semibold text-[#D64545]">−${totalVendido}</p>
+      </div>
+      <div class="bg-[#F7F3FA] rounded-xl p-3">
+        <p class="text-[10px] text-[#8a7d94]">Perdido (total)</p>
+        <p class="font-mono-num text-[15px] font-semibold text-[#8a7d94]">−${totalPerdido}</p>
+      </div>
+      <div class="bg-[#F7F3FA] rounded-xl p-3">
+        <p class="text-[10px] text-[#8a7d94]">Stock esperado</p>
+        <p class="font-mono-num text-[15px] font-semibold text-[#241C2E]">${stockEsperado}</p>
+      </div>
+    </div>
+
+    <div class="rounded-xl p-3 mb-4 ${diferencia === 0 ? 'bg-[#2F9E7A]/10' : 'bg-[#D64545]/10'}">
+      <p class="text-[12px] font-semibold ${diferencia === 0 ? 'text-[#2F9E7A]' : 'text-[#D64545]'}">
+        ${diferencia === 0
+          ? `✓ Coincide: el stock actual (${p.stock}) es exactamente lo que se esperaba.`
+          : `⚠ Hay una diferencia de ${diferencia > 0 ? "+" : ""}${diferencia}. Stock actual: ${p.stock}, esperado: ${stockEsperado}.`}
+      </p>
+      ${diferencia !== 0 ? `<p class="text-[11px] text-[#8a7d94] mt-1">Si en algún momento editaste el stock a mano desde esta ficha (para corregir un conteo físico), eso también genera diferencia acá — es normal y no es un error. Si nunca lo tocaste a mano, esta diferencia sí merece revisarse.</p>` : ""}
+    </div>
+
+    ${sectionLabel(`Movimientos (${movimientos.length}), del más viejo al más nuevo`)}
+    <div>${filasHtml || `<p class="text-[13px] text-[#8a7d94]">Sin movimientos registrados todavía.</p>`}</div>
+  `);
+}
+
 // ---------- Auditoría ----------
 const ICONO_ACCION = { crear: "🟢", editar: "🟡", eliminar: "🔴" };
 const NOMBRE_TABLA = {
@@ -3865,6 +3950,7 @@ async function openEditProduct(id) {
         <button onclick="registrarProduccion(${p.id})" class="bg-[#6B2D5C] text-white text-[12px] font-semibold px-3 py-2 rounded-lg">Producir</button>
       </div>
     </div>` : ""}
+    <button onclick="auditarProducto(${p.id})" class="w-full text-[#6B2D5C] text-[13px] font-semibold py-3 mt-1 border-t border-black/[0.06]">🔍 Ver todos los movimientos de este producto</button>
     <button onclick="deleteProduct(${p.id})" class="w-full text-[#D64545] text-[13px] font-semibold py-3 mt-1">Eliminar producto</button>
   `);
 }
