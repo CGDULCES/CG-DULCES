@@ -2754,26 +2754,44 @@ async function auditarProducto(productoId) {
   closeModal();
   const p = productos.find((pr) => pr.id === productoId);
 
-  const [{ data: comprasDe }, { data: ventasDe }, { data: perdidasDe }] = await Promise.all([
-    sb.from("compra_items").select("cantidad, costo_unitario, compras(id, created_at, proveedores(nombre))").eq("producto_id", productoId),
-    sb.from("venta_items").select("cantidad, ventas(id, created_at, es_fiado, clientes(nombre))").eq("producto_id", productoId),
+  // Se consulta todo por separado (sin relaciones anidadas), para evitar que una relación
+  // rota o bloqueada haga desaparecer datos reales en silencio.
+  const [{ data: itemsCompra }, { data: itemsVenta }, { data: perdidasDe }] = await Promise.all([
+    sb.from("compra_items").select("cantidad, costo_unitario, compra_id").eq("producto_id", productoId),
+    sb.from("venta_items").select("cantidad, venta_id").eq("producto_id", productoId),
     sb.from("perdidas").select("cantidad, motivo, created_at").eq("producto_id", productoId),
+  ]);
+
+  const compraIds = [...new Set((itemsCompra || []).map((c) => c.compra_id))];
+  const ventaIds = [...new Set((itemsVenta || []).map((v) => v.venta_id))];
+
+  const [{ data: comprasDatos }, { data: ventasDatos }] = await Promise.all([
+    compraIds.length ? sb.from("compras").select("id, created_at, proveedor_id").in("id", compraIds) : Promise.resolve({ data: [] }),
+    ventaIds.length ? sb.from("ventas").select("id, created_at, es_fiado, cliente_id").in("id", ventaIds) : Promise.resolve({ data: [] }),
   ]);
 
   const factor = factorConversion(p);
   const movimientos = [];
-  (comprasDe || []).forEach((c) => {
-    if (!c.compras) return; // la compra fue eliminada; ya no cuenta
-    movimientos.push({ tipo: "compra", fecha: c.compras.created_at, cantidad: c.cantidad * factor, detalle: c.compras.proveedores?.nombre || "sin proveedor" });
+  (itemsCompra || []).forEach((c) => {
+    const compra = (comprasDatos || []).find((cc) => cc.id === c.compra_id);
+    if (!compra) return; // la compra fue eliminada; ya no cuenta
+    const proveedor = proveedores.find((pr) => pr.id === compra.proveedor_id);
+    movimientos.push({ tipo: "compra", fecha: compra.created_at, cantidad: c.cantidad * factor, detalle: proveedor?.nombre || "sin proveedor" });
   });
-  (ventasDe || []).forEach((v) => {
-    if (!v.ventas) return; // la venta fue eliminada; ya no cuenta
-    movimientos.push({ tipo: "venta", fecha: v.ventas.created_at, cantidad: -v.cantidad, detalle: v.ventas.clientes?.nombre ? `a ${v.ventas.clientes.nombre}` : (v.ventas.es_fiado ? "fiado" : "") });
+  (itemsVenta || []).forEach((v) => {
+    const venta = (ventasDatos || []).find((vv) => vv.id === v.venta_id);
+    if (!venta) return; // la venta fue eliminada; ya no cuenta
+    const cliente = clientes.find((c) => c.id === venta.cliente_id);
+    movimientos.push({ tipo: "venta", fecha: venta.created_at, cantidad: -v.cantidad, detalle: cliente?.nombre ? `a ${cliente.nombre}` : (venta.es_fiado ? "fiado" : "") });
   });
   (perdidasDe || []).forEach((pe) => {
     movimientos.push({ tipo: "pérdida", fecha: pe.created_at, cantidad: -pe.cantidad, detalle: pe.motivo || "" });
   });
+
+  // Se calcula el acumulado en orden cronológico (necesario para que la cuenta sea correcta)...
   movimientos.sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+  let corrida = 0;
+  movimientos.forEach((m) => { corrida += m.cantidad; m.acumulado = corrida; });
 
   const totalComprado = movimientos.filter((m) => m.tipo === "compra").reduce((s, m) => s + m.cantidad, 0);
   const totalVendido = -movimientos.filter((m) => m.tipo === "venta").reduce((s, m) => s + m.cantidad, 0);
@@ -2781,9 +2799,8 @@ async function auditarProducto(productoId) {
   const stockEsperado = totalComprado - totalVendido - totalPerdido;
   const diferencia = Number(p.stock) - stockEsperado;
 
-  let corrida = 0;
-  const filasHtml = movimientos.map((m) => {
-    corrida += m.cantidad;
+  // ...y ahora se muestra con los movimientos más nuevos arriba
+  const filasHtml = [...movimientos].reverse().map((m) => {
     const color = m.tipo === "compra" ? "#2F9E7A" : m.tipo === "venta" ? "#D64545" : "#8a7d94";
     const TIPO_LABEL = { compra: "Compra", venta: "Venta", "pérdida": "Pérdida" };
     return `
@@ -2793,7 +2810,7 @@ async function auditarProducto(productoId) {
           <span class="font-mono-num text-[12px] font-semibold" style="color:${color}">${m.cantidad>0?"+":""}${m.cantidad}</span>
         </div>
         <p class="text-[10px] text-[#8a7d94]">${new Date(m.fecha).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}</p>
-        <p class="text-[9px] text-[#8a7d94] mt-0.5">Acumulado esperado: ${corrida}</p>
+        <p class="text-[9px] text-[#8a7d94] mt-0.5">Acumulado esperado en ese momento: ${m.acumulado}</p>
       </div>`;
   }).join("");
 
@@ -2829,7 +2846,7 @@ async function auditarProducto(productoId) {
       ${diferencia !== 0 ? `<p class="text-[11px] text-[#8a7d94] mt-1">Si en algún momento editaste el stock a mano desde esta ficha (para corregir un conteo físico), eso también genera diferencia acá — es normal y no es un error. Si nunca lo tocaste a mano, esta diferencia sí merece revisarse.</p>` : ""}
     </div>
 
-    ${sectionLabel(`Movimientos (${movimientos.length}), del más viejo al más nuevo`)}
+    ${sectionLabel(`Movimientos (${movimientos.length}), del más nuevo al más viejo`)}
     <div>${filasHtml || `<p class="text-[13px] text-[#8a7d94]">Sin movimientos registrados todavía.</p>`}</div>
   `);
 }
