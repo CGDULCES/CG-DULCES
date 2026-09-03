@@ -12,9 +12,13 @@
   body { font-family: 'Inter', sans-serif; background:#EDE7F3; }
   .font-display { font-family: 'Fraunces', serif; }
   .font-mono-num { font-family: 'IBM Plex Mono', monospace; }
-  .tab-btn.active svg { color:#6B2D5C; }
-  .tab-btn.active span { color:#6B2D5C; font-weight:600; }
-  .tab-btn svg, .tab-btn span { color:#b3a6bd; }
+  .tab-btn { position: relative; color:#b3a6bd; transition: color .15s ease; }
+  .tab-btn .tab-pill { position:absolute; inset:-4px -6px; border-radius:16px; background:transparent; transition: background .18s ease, transform .18s ease; transform: scale(.9); z-index:0; }
+  .tab-btn .tab-icon, .tab-btn span { position:relative; z-index:1; }
+  .tab-btn.active { color:#6B2D5C; }
+  .tab-btn.active .tab-pill { background:#F3E9F1; transform: scale(1); }
+  .tab-btn.active span { font-weight:600; }
+  .tab-btn span { font-size:10.5px; letter-spacing:.01em; }
   .stock-fill { transition: width .4s ease; }
   .modal-overlay { background: rgba(36,28,46,0.55); }
   .screen-hidden { display: none !important; }
@@ -26,6 +30,11 @@
 <!-- Pantalla de login -->
 <div id="login-screen" class="relative w-full max-w-[460px] md:max-w-none lg:max-w-[1100px] sm:h-[860px] md:h-[90vh] sm:rounded-[2.25rem] sm:shadow-2xl sm:border sm:border-black/5 bg-[#F7F3FA] overflow-hidden flex flex-col min-h-screen">
   <div class="flex-1 flex flex-col items-center justify-center px-8">
+    <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#6B2D5C" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="mb-3">
+      <circle cx="12" cy="9" r="5.2"/>
+      <path d="M12 14.2 8.3 22"/>
+      <path d="M9.5 6.8c1-1 3-1 3.6.3" stroke="#B45E93" stroke-width="1.2"/>
+    </svg>
     <p class="font-display text-[28px] font-semibold text-[#6B2D5C] mb-1">CG Dulces</p>
     <p class="text-[13px] text-[#8a7d94] mb-8">Ingresá para ver el panel del negocio</p>
     <form id="login-form" class="w-full space-y-3">
@@ -47,13 +56,20 @@
   <!-- Encabezado -->
   <div class="px-6 pt-6 pb-4 bg-[#6B2D5C] text-white shrink-0">
     <div class="flex items-center justify-between">
-      <div>
-        <p class="font-display text-[22px] font-semibold leading-tight">CG Dulces</p>
-        <p class="text-[12px] text-white/70">Panel del negocio</p>
+      <div class="flex items-center gap-2.5">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#F3C6DE" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
+          <circle cx="12" cy="9" r="5.2"/>
+          <path d="M12 14.2 8.3 22"/>
+          <path d="M9.5 6.8c1-1 3-1 3.6.3" stroke="#6B2D5C" stroke-width="1.3"/>
+        </svg>
+        <div>
+          <p class="font-display text-[22px] font-semibold leading-tight">CG Dulces</p>
+          <p class="text-[12px] text-white/70">Panel del negocio</p>
+        </div>
       </div>
-      <div class="flex items-center gap-3">
-        <button onclick="irA('masopciones')" class="text-[11px] text-white/70 underline">Más</button>
-        <button id="logout-btn" class="text-[11px] text-white/70 underline">Salir</button>
+      <div class="flex items-center gap-1.5">
+        <button onclick="irA('masopciones')" class="text-[11px] font-medium text-white bg-white/15 hover:bg-white/20 rounded-full px-3 py-1.5">Más</button>
+        <button id="logout-btn" class="text-[11px] font-medium text-white/85 hover:text-white bg-white/5 hover:bg-white/15 rounded-full px-3 py-1.5">Salir</button>
       </div>
     </div>
   </div>
@@ -70,30 +86,34 @@
   <button id="add-product-fab" class="screen-hidden absolute bottom-[96px] right-4 w-12 h-12 rounded-full bg-[#6B2D5C] text-white text-[22px] shadow-xl items-center justify-center">+</button>
 
   <!-- Navegación inferior -->
-  <div class="shrink-0 bg-white border-t border-black/[0.06] px-6 pt-2 pb-3">
+  <div class="shrink-0 bg-white rounded-t-[28px] shadow-[0_-8px_24px_-12px_rgba(36,28,46,0.18)] px-4 pt-3 pb-3">
     <div class="flex items-center justify-around">
-      <button class="tab-btn flex flex-col items-center gap-1 py-1 px-3" data-tab="dashboard">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
-        <span class="text-[10px]">Dashboard</span>
+      <button class="tab-btn flex flex-col items-center gap-1 py-1.5 px-3" data-tab="dashboard">
+        <span class="tab-pill"></span>
+        <svg class="tab-icon" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+        <span>Dashboard</span>
       </button>
-      <button class="tab-btn flex flex-col items-center gap-1 py-1 px-3" data-tab="vender">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
-        <span class="text-[10px]">Caja</span>
+      <button class="tab-btn flex flex-col items-center gap-1 py-1.5 px-3" data-tab="vender">
+        <span class="tab-pill"></span>
+        <svg class="tab-icon" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+        <span>Caja</span>
       </button>
-      <button class="tab-btn flex flex-col items-center gap-1 py-1 px-3" data-tab="inventario">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 8V21H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>
-        <span class="text-[10px]">Inventario</span>
+      <button class="tab-btn flex flex-col items-center gap-1 py-1.5 px-3" data-tab="inventario">
+        <span class="tab-pill"></span>
+        <svg class="tab-icon" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8V21H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/></svg>
+        <span>Inventario</span>
       </button>
-      <button class="tab-btn flex flex-col items-center gap-1 py-1 px-3" data-tab="compras">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
-        <span class="text-[10px]">Compras</span>
+      <button class="tab-btn flex flex-col items-center gap-1 py-1.5 px-3" data-tab="compras">
+        <span class="tab-pill"></span>
+        <svg class="tab-icon" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+        <span>Compras</span>
       </button>
-      <button class="tab-btn flex flex-col items-center gap-1 py-1 px-3" data-tab="clientes">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-        <span class="text-[10px]">Clientes</span>
+      <button class="tab-btn flex flex-col items-center gap-1 py-1.5 px-3" data-tab="clientes">
+        <span class="tab-pill"></span>
+        <svg class="tab-icon" width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span>Clientes</span>
       </button>
     </div>
-    <div class="w-32 h-1 bg-[#241C2E]/15 rounded-full mx-auto mt-2.5"></div>
   </div>
 </div>
 
