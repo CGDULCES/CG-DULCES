@@ -1,0 +1,9 @@
+node_modules/
+vendor/
+*.bak
+.DS_Store
+Thumbs.db
+backup-cgdulces-*.json
+.env
+.env.*
+supabase/.temp/

@@ -1,0 +1,15 @@
+{
+  "name": "cg-dulces",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Panel del negocio CG Dulces (ventas, caja, inventario, fiado, compras).",
+  "scripts": {
+    "build:css": "tailwindcss -i ./css/input.css -o ./css/app.css --minify",
+    "watch:css": "tailwindcss -i ./css/input.css -o ./css/app.css --watch",
+    "serve": "npx --yes serve -l 5173 .",
+    "vendor": "node ./scripts/vendor.mjs"
+  },
+  "devDependencies": {
+    "tailwindcss": "^3.4.10"
+  }
+}
