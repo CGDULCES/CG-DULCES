@@ -36,8 +36,12 @@ alter table public.usuarios_app add column if not exists rol        text not nul
 alter table public.usuarios_app add column if not exists pin_hash   text;                                -- PIN 4-6 dígitos, hasheado (nunca en texto plano)
 alter table public.usuarios_app add column if not exists activo     boolean not null default true;
 alter table public.usuarios_app add column if not exists auth_uid   uuid;                                -- se enlaza con auth.users cuando cada vendedor tenga su login
-alter table public.usuarios_app add constraint usuarios_app_rol_chk
-  check (rol in ('duena','vendedor')) not valid;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'usuarios_app_rol_chk') then
+    alter table public.usuarios_app add constraint usuarios_app_rol_chk
+      check (rol in ('duena','vendedor')) not valid;
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------
 -- Categorías
@@ -142,7 +146,11 @@ create table if not exists public.caja (
   fecha_cierre      timestamptz,
   registrado_por    text
 );
-alter table public.caja add constraint caja_estado_chk check (estado in ('abierta','cerrada')) not valid;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'caja_estado_chk') then
+    alter table public.caja add constraint caja_estado_chk check (estado in ('abierta','cerrada')) not valid;
+  end if;
+end $$;
 create unique index if not exists uq_caja_una_abierta on public.caja(estado) where estado = 'abierta';
 
 create table if not exists public.caja_movimientos (
@@ -315,8 +323,12 @@ create table if not exists public.pedidos (
   venta_id        bigint references public.ventas(id) on delete set null,  -- cuando se concreta
   created_at      timestamptz not null default now()
 );
-alter table public.pedidos add constraint pedidos_estado_chk
-  check (estado in ('pendiente','listo','entregado','cancelado')) not valid;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'pedidos_estado_chk') then
+    alter table public.pedidos add constraint pedidos_estado_chk
+      check (estado in ('pendiente','listo','entregado','cancelado')) not valid;
+  end if;
+end $$;
 create index if not exists idx_pedidos_estado  on public.pedidos(estado);
 create index if not exists idx_pedidos_entrega on public.pedidos(fecha_entrega);
 

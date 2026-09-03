@@ -1,18 +1,18 @@
 -- =====================================================================
--- CG DULCES · APLICAR TODO DE UNA VEZ  (seguridad + transacciones + análisis)
+-- CG DULCES · APLICAR TODO DE UNA VEZ  (seguridad + transacciones + analisis)
 -- =====================================================================
 -- Junta EN ORDEN:  01_schema -> 02_security -> 03_rpc -> 04_triggers -> 05_views
 --
--- CÓMO USARLO (una sola vez):
---   1. supabase.com  ->  tu proyecto  ->  menú izquierdo "SQL Editor"
---   2. Botón  "+ New query"
---   3. Pegá TODO este archivo
---   4. Botón  "Run"  (abajo a la derecha).  Debe decir  "Success".
---   5. Después corré  VERIFICAR.sql  y mandale el resultado a Claude.
+-- COMO USARLO (una sola vez):
+--   1. supabase.com  ->  tu proyecto  ->  menu izquierdo "SQL Editor"
+--   2. Boton  "+ New query"
+--   3. Pega TODO este archivo
+--   4. Boton  "Run"  (arriba a la derecha).  Debe decir  "Success".
+--   5. Despues corre  VERIFICAR.sql  y manda el resultado a Claude.
 --
 -- Storage (fotos, comprobantes, backups) va aparte en 06_storage.sql.
--- Es seguro re-ejecutar este archivo: usa "if not exists" / "create or replace".
--- No borra ni cambia datos existentes.
+-- Es seguro re-ejecutar este archivo: usa "if not exists" / "create or replace"
+-- y chequeos antes de crear constraints. No borra ni cambia datos existentes.
 -- =====================================================================
 
 
@@ -58,8 +58,12 @@ alter table public.usuarios_app add column if not exists rol        text not nul
 alter table public.usuarios_app add column if not exists pin_hash   text;                                -- PIN 4-6 dígitos, hasheado (nunca en texto plano)
 alter table public.usuarios_app add column if not exists activo     boolean not null default true;
 alter table public.usuarios_app add column if not exists auth_uid   uuid;                                -- se enlaza con auth.users cuando cada vendedor tenga su login
-alter table public.usuarios_app add constraint usuarios_app_rol_chk
-  check (rol in ('duena','vendedor')) not valid;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'usuarios_app_rol_chk') then
+    alter table public.usuarios_app add constraint usuarios_app_rol_chk
+      check (rol in ('duena','vendedor')) not valid;
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------
 -- Categorías
@@ -164,7 +168,11 @@ create table if not exists public.caja (
   fecha_cierre      timestamptz,
   registrado_por    text
 );
-alter table public.caja add constraint caja_estado_chk check (estado in ('abierta','cerrada')) not valid;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'caja_estado_chk') then
+    alter table public.caja add constraint caja_estado_chk check (estado in ('abierta','cerrada')) not valid;
+  end if;
+end $$;
 create unique index if not exists uq_caja_una_abierta on public.caja(estado) where estado = 'abierta';
 
 create table if not exists public.caja_movimientos (
@@ -337,8 +345,12 @@ create table if not exists public.pedidos (
   venta_id        bigint references public.ventas(id) on delete set null,  -- cuando se concreta
   created_at      timestamptz not null default now()
 );
-alter table public.pedidos add constraint pedidos_estado_chk
-  check (estado in ('pendiente','listo','entregado','cancelado')) not valid;
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'pedidos_estado_chk') then
+    alter table public.pedidos add constraint pedidos_estado_chk
+      check (estado in ('pendiente','listo','entregado','cancelado')) not valid;
+  end if;
+end $$;
 create index if not exists idx_pedidos_estado  on public.pedidos(estado);
 create index if not exists idx_pedidos_entrega on public.pedidos(fecha_entrega);
 
@@ -553,7 +565,7 @@ commit;
 -- ###  03_rpc.sql
 -- #####################################################################
 
-﻿-- =====================================================================
+-- =====================================================================
 -- CG DULCES · Funciones transaccionales (RPC)
 -- =====================================================================
 -- QUÉ ARREGLA ESTO:
