@@ -1534,14 +1534,20 @@ function renderClienteDetalle(content) {
     <button onclick="irA('clientes')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver a Clientes</button>
     <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
       <div class="flex items-center justify-between">
-        <p class="font-display text-[18px] font-semibold text-[#241C2E]">${cliente.nombre}</p>
+        <p class="font-display text-[18px] font-semibold text-[#241C2E]">${CG.escapeHtml(cliente.nombre)}</p>
         <div class="flex items-center gap-3">
           <button onclick="openEditCliente(${cliente.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar</button>
           <button onclick="deleteCliente(${cliente.id})" class="text-[11px] text-[#D64545] font-semibold">Eliminar</button>
         </div>
       </div>
+      ${cliente.telefono ? `<p class="text-[12px] text-[#8a7d94] mt-0.5">📱 ${CG.escapeHtml(cliente.telefono)}</p>` : ""}
       <p class="text-[13px] mt-1 ${deudaTotal > 0 ? 'text-[#D64545] font-semibold' : 'text-[#2F9E7A] font-semibold'}">${deudaTotal > 0 ? `Debe en total ${fmt(deudaTotal)}` : "Sin deuda pendiente"}</p>
       ${pagosSinVenta > 0 ? `<p class="text-[11px] text-[#8a7d94] mt-1">Aparte, hay ${fmt(pagosSinVenta)} en pagos viejos sin venta asociada (no están descontados de este total)</p>` : ""}
+      ${deudaTotal > 0 ? `
+      <button onclick="recordarDeudaWhatsapp(${cliente.id})" class="mt-3 w-full bg-[#25D366] text-white font-semibold rounded-xl py-2.5 text-[13px] flex items-center justify-center gap-2">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91S17.5 2 12.04 2zm5.8 14.16c-.24.68-1.19 1.25-1.95 1.41-.52.11-1.2.2-3.48-.75-2.92-1.21-4.8-4.17-4.94-4.36-.14-.19-1.18-1.57-1.18-3 0-1.43.75-2.13 1.02-2.42.27-.29.58-.36.78-.36.19 0 .39 0 .56.01.18.01.42-.07.65.5.24.58.82 2 .89 2.15.07.15.11.32.02.51-.09.19-.14.31-.27.48-.14.17-.29.37-.41.5-.14.14-.28.29-.12.57.16.28.71 1.18 1.53 1.91 1.05.94 1.94 1.23 2.22 1.37.28.14.44.12.6-.07.16-.19.68-.79.87-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.32.06.11.06.66-.18 1.34z"/></svg>
+        Recordar deuda por WhatsApp
+      </button>` : ""}
     </div>
 
     <div class="flex items-center justify-between mb-2">
@@ -1635,6 +1641,29 @@ function renderClienteDetalle(content) {
       </div>
     `;
   }
+}
+
+// Arma un mensaje de recordatorio de deuda y lo abre en WhatsApp (al teléfono
+// del cliente si lo tiene guardado, o al selector de contactos si no).
+function recordarDeudaWhatsapp(clienteId) {
+  const cliente = clientes.find((c) => c.id === clienteId);
+  if (!cliente) return;
+  const ventas = window.__clienteDetalleVentas || [];
+  const repartos = window.__clienteDetalleRepartos || [];
+  const pendientes = [];
+  ventas.filter((v) => v.es_fiado).forEach((v) => {
+    const p = Math.max(0, Number(v.total) - pagadoDeVenta(v.id));
+    if (p > 0) pendientes.push({ created_at: v.created_at, pendiente: p });
+  });
+  repartos.forEach((r) => {
+    const p = Math.max(0, Number(r.monto) - pagadoDeReparto(r.venta_id));
+    if (p > 0) pendientes.push({ created_at: r.created_at, pendiente: p });
+  });
+  const deuda = pendientes.reduce((s, x) => s + x.pendiente, 0);
+  if (deuda <= 0) { alert("Este cliente no tiene deuda pendiente."); return; }
+  pendientes.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  const mensaje = CG.mensajeFiado({ negocio: "CG Dulces", cliente, deuda, ventas: pendientes });
+  CG.abrirWhatsApp(cliente.telefono || "", mensaje);
 }
 
 function toggleSeleccionVenta(ventaId, checked) {
@@ -1915,16 +1944,19 @@ function openEditCliente(id) {
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Editar cliente</p>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Nombre</label>
-    <input id="edit-cliente-nombre" type="text" value="${c.nombre}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
+    <input id="edit-cliente-nombre" type="text" value="${CG.escapeHtml(c.nombre)}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Teléfono / WhatsApp (opcional)</label>
+    <input id="edit-cliente-telefono" type="tel" inputmode="numeric" value="${CG.escapeHtml(c.telefono || "")}" placeholder="Ej: 0981 123 456" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
     <button onclick="saveEditCliente(${id})" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Guardar cambios</button>
   `);
 }
 async function saveEditCliente(id) {
   const nombre = document.getElementById("edit-cliente-nombre").value.trim();
   if (!nombre) { alert("Poné un nombre."); return; }
-  const { error } = await sb.from("clientes").update({ nombre }).eq("id", id);
+  const telefono = document.getElementById("edit-cliente-telefono").value.trim() || null;
+  const { error } = await sb.from("clientes").update({ nombre, telefono }).eq("id", id);
   if (error) { alert("No se pudo guardar."); console.error(error); return; }
-  await registrarHistorial("clientes", id, "editar", `Nombre editado a: ${nombre}`);
+  await registrarHistorial("clientes", id, "editar", `Cliente editado: ${nombre}`);
   closeModal();
   await loadAll();
   await abrirClienteDetalle(id);
@@ -1949,14 +1981,17 @@ function openNewCliente() {
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Nuevo cliente</p>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Nombre</label>
-    <input id="cliente-nombre" type="text" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+    <input id="cliente-nombre" type="text" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Teléfono / WhatsApp (opcional)</label>
+    <input id="cliente-telefono" type="tel" inputmode="numeric" placeholder="Ej: 0981 123 456" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
     <button onclick="saveNewCliente()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3 mt-5">Guardar</button>
   `);
 }
 async function saveNewCliente() {
   const nombre = document.getElementById("cliente-nombre").value.trim();
   if (!nombre) { alert("Poné un nombre."); return; }
-  const { data, error } = await sb.from("clientes").insert({ nombre }).select().single();
+  const telefono = document.getElementById("cliente-telefono").value.trim() || null;
+  const { data, error } = await sb.from("clientes").insert({ nombre, telefono }).select().single();
   if (error) { alert("No se pudo guardar."); console.error(error); return; }
   await registrarHistorial("clientes", data.id, "crear", `Cliente creado: ${nombre}`);
   closeModal();
