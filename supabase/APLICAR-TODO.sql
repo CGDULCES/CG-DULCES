@@ -84,6 +84,7 @@ create table if not exists public.proveedores (
   telefono    text,
   created_at  timestamptz not null default now()
 );
+alter table public.proveedores add column if not exists telefono text;   -- por si acaso: refuerzo defensivo
 
 -- ---------------------------------------------------------------------
 -- Clientes
@@ -94,6 +95,7 @@ create table if not exists public.clientes (
   telefono    text,
   created_at  timestamptz not null default now()
 );
+alter table public.clientes add column if not exists telefono text;   -- la app original nunca lo usó: puede faltar en tablas ya existentes
 alter table public.clientes add column if not exists notas text;
 
 -- ---------------------------------------------------------------------
