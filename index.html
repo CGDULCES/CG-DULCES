@@ -455,7 +455,7 @@ function sectionLabel(text) {
 // ---------- Render principal ----------
 function render() {
   const content = document.getElementById("content");
-  const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes", "auditoria": "", "masopciones": "", "reportes": "", "promociones": "", "configuracion": "", "todas-ventas": "dashboard", "detallecaja": "", "perdidas": "", "categorias": "" };
+  const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes", "auditoria": "", "masopciones": "", "reportes": "", "promociones": "", "configuracion": "", "todas-ventas": "dashboard", "detallecaja": "", "perdidas": "", "categorias": "", "reposicion": "", "pedidos": "", "analisis": "" };
   const grupoActivo = mapaGrupo[activeTab] || activeTab;
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === grupoActivo));
   document.getElementById("add-product-fab").classList.toggle("screen-hidden", activeTab !== "inventario");
@@ -477,6 +477,9 @@ function render() {
   if (activeTab === "configuracion") renderConfiguracion(content);
   if (activeTab === "detallecaja") renderDetalleCaja(content);
   if (activeTab === "perdidas") renderPerdidas(content);
+  if (activeTab === "reposicion") renderReposicion(content);
+  if (activeTab === "pedidos") renderPedidos(content);
+  if (activeTab === "analisis") renderAnalisis(content);
   renderCartBar();
 }
 
@@ -2063,6 +2066,15 @@ function renderMasOpciones(content) {
     <button onclick="irA('dashboard')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver al Dashboard</button>
     ${sectionLabel("Más opciones")}
     <div class="space-y-3">
+      <button onclick="irA('pedidos')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
+        <span class="text-[14px] font-semibold text-[#241C2E]">Pedidos / encargos</span><span class="text-[#8a7d94]">›</span>
+      </button>
+      <button onclick="irA('reposicion')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
+        <span class="text-[14px] font-semibold text-[#241C2E]">Lista de reposición</span><span class="text-[#8a7d94]">›</span>
+      </button>
+      <button onclick="abrirAnalisis()" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
+        <span class="text-[14px] font-semibold text-[#241C2E]">Análisis del negocio</span><span class="text-[#8a7d94]">›</span>
+      </button>
       <button onclick="abrirReportes()" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
         <span class="text-[14px] font-semibold text-[#241C2E]">Reportes</span><span class="text-[#8a7d94]">›</span>
       </button>
@@ -2086,6 +2098,393 @@ function renderMasOpciones(content) {
       </button>
     </div>
   `;
+}
+
+// ---------- Lista de reposición ----------
+window.__reposicion = [];
+
+async function renderReposicion(content) {
+  content.innerHTML = `
+    <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Lista de reposición")}
+    <p class="text-[13px] text-[#8a7d94]">Calculando qué comprar según lo que vendés...</p>`;
+  const { data, error } = await sb.from("v_reposicion").select("*");
+  if (error) { content.innerHTML += `<p class="text-[13px] text-[#D64545]">No se pudo cargar.</p>`; console.error(error); return; }
+  window.__reposicion = data || [];
+
+  if (window.__reposicion.length === 0) {
+    content.innerHTML = `
+      <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+      ${sectionLabel("Lista de reposición")}
+      <div class="bg-[#2F9E7A]/10 border border-[#2F9E7A]/25 rounded-xl p-4 text-[13px] text-[#2F9E7A] font-semibold">✓ Todo bien: ningún producto necesita reposición ahora.</div>`;
+    return;
+  }
+
+  // agrupar por proveedor
+  const grupos = {};
+  window.__reposicion.forEach((r) => {
+    const key = r.proveedor || "Sin proveedor asignado";
+    (grupos[key] = grupos[key] || []).push(r);
+  });
+
+  let html = `
+    <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Lista de reposición")}
+    <p class="text-[11px] text-[#8a7d94] mb-3">Ordenado por urgencia. "Sugerido" = para volver al doble del mínimo + una semana de venta.</p>`;
+
+  Object.entries(grupos).forEach(([prov, items]) => {
+    const tel = items[0].proveedor_telefono;
+    html += `
+    <div class="mb-4">
+      <div class="flex items-center justify-between mb-2">
+        <p class="text-[12px] font-semibold text-[#241C2E]">${CG.escapeHtml(prov)}</p>
+        ${prov !== "Sin proveedor asignado" ? `
+        <button onclick="pedirReposicionWhatsapp('${CG.escapeHtml(prov).replace(/'/g,"\\'")}')" class="text-[11px] bg-[#25D366] text-white font-semibold rounded-lg px-2.5 py-1.5">Pedir por WhatsApp</button>` : ""}
+      </div>
+      <div class="space-y-2">
+        ${items.map((r) => `
+          <div class="bg-white rounded-2xl p-3.5 shadow-sm border border-black/[0.04]">
+            <div class="flex items-center justify-between">
+              <p class="text-[13px] font-semibold text-[#241C2E]">${CG.escapeHtml(r.nombre)}${r.presentacion ? " · " + CG.escapeHtml(r.presentacion) : ""}</p>
+              <p class="font-mono-num text-[13px] font-semibold text-[#6B2D5C]">comprar ~${r.sugerido_comprar}</p>
+            </div>
+            <p class="text-[11px] text-[#8a7d94] mt-0.5">
+              Stock ${r.stock} (mín ${r.stock_minimo}) · vende ${r.venta_diaria}/día
+              ${r.dias_cobertura != null ? ` · dura ${r.dias_cobertura} día(s)` : ""}
+            </p>
+          </div>`).join("")}
+      </div>
+    </div>`;
+  });
+  content.innerHTML = html;
+}
+
+function pedirReposicionWhatsapp(prov) {
+  const items = window.__reposicion.filter((r) => (r.proveedor || "Sin proveedor asignado") === prov);
+  if (!items.length) return;
+  const tel = items[0].proveedor_telefono || "";
+  const L = [`*CG Dulces — Pedido*`, `Hola ${prov}, necesito:`, ""];
+  items.forEach((r) => L.push(`• ${r.sugerido_comprar} x ${r.nombre}${r.presentacion ? " " + r.presentacion : ""}`));
+  L.push("", "¡Gracias! 🍬");
+  CG.abrirWhatsApp(tel, L.join("\n"));
+}
+
+// ---------- Pedidos / encargos ----------
+window.__pedidos = [];
+window.__pedidoItems = [];
+window.__pedidoEditId = null;
+
+async function renderPedidos(content) {
+  content.innerHTML = `
+    <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Pedidos / encargos")}
+    <p class="text-[13px] text-[#8a7d94]">Cargando...</p>`;
+  const { data, error } = await sb
+    .from("pedidos")
+    .select("*, pedido_items(id, producto_id, descripcion, cantidad, precio_unitario)")
+    .order("fecha_entrega", { ascending: true });
+  if (error) { content.innerHTML += `<p class="text-[13px] text-[#D64545]">No se pudo cargar.</p>`; console.error(error); return; }
+  window.__pedidos = data || [];
+
+  const abiertos = window.__pedidos.filter((p) => p.estado === "pendiente" || p.estado === "listo");
+  const cerrados = window.__pedidos.filter((p) => p.estado === "entregado" || p.estado === "cancelado").slice(0, 20);
+  const ESTADO = { pendiente: ["Pendiente", "#F2994A"], listo: ["Listo", "#2F9E7A"], entregado: ["Entregado", "#8a7d94"], cancelado: ["Cancelado", "#D64545"] };
+
+  const tarjeta = (p) => {
+    const items = p.pedido_items || [];
+    const total = items.reduce((s, it) => s + it.cantidad * it.precio_unitario, 0) || p.total_estimado;
+    const [lbl, col] = ESTADO[p.estado] || ["", "#8a7d94"];
+    const venc = p.fecha_entrega;
+    return `
+      <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+        <div class="flex items-center justify-between">
+          <p class="text-[13px] font-semibold text-[#241C2E]">${CG.escapeHtml(p.cliente_nombre || clientes.find((c) => c.id === p.cliente_id)?.nombre || "Sin nombre")}</p>
+          <span class="text-[10px] font-semibold px-2 py-0.5 rounded-full" style="background:${col}1a;color:${col}">${lbl}</span>
+        </div>
+        <p class="text-[11px] text-[#8a7d94] mt-0.5">Entrega: ${new Date(venc + "T12:00:00").toLocaleDateString("es-PY")}${p.telefono ? " · " + CG.escapeHtml(p.telefono) : ""}</p>
+        <div class="text-[12px] text-[#241C2E] mt-1.5 space-y-0.5">
+          ${items.map((it) => `<div>${it.cantidad}× ${CG.escapeHtml(it.descripcion || productos.find((pr) => pr.id === it.producto_id)?.nombre || "")} — ${fmt(it.cantidad * it.precio_unitario)}</div>`).join("")}
+        </div>
+        <div class="flex items-center justify-between mt-2">
+          <span class="text-[12px] font-semibold">Total ${fmt(total)}${p.sena > 0 ? ` · seña ${fmt(p.sena)}` : ""}</span>
+        </div>
+        ${p.notas ? `<p class="text-[11px] text-[#8a7d94] mt-1">📝 ${CG.escapeHtml(p.notas)}</p>` : ""}
+        <div class="flex flex-wrap items-center gap-2.5 mt-3 pt-3 border-t border-black/[0.06]">
+          ${p.estado === "pendiente" ? `<button onclick="cambiarEstadoPedido(${p.id}, 'listo')" class="text-[11px] text-[#2F9E7A] font-semibold">Marcar listo</button>` : ""}
+          ${p.estado === "listo" ? `<button onclick="concretarPedido(${p.id})" class="text-[11px] text-[#2F9E7A] font-semibold">Concretar venta</button>` : ""}
+          ${(p.estado === "pendiente" || p.estado === "listo") ? `
+            <button onclick="avisarPedidoWhatsapp(${p.id})" class="text-[11px] text-[#25D366] font-semibold">Avisar por WhatsApp</button>
+            <button onclick="openNuevoPedido(${p.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar</button>
+            <button onclick="cambiarEstadoPedido(${p.id}, 'cancelado')" class="text-[11px] text-[#D64545] font-semibold">Cancelar</button>` : ""}
+        </div>
+      </div>`;
+  };
+
+  content.innerHTML = `
+    <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Pedidos / encargos")}
+    <button onclick="openNuevoPedido()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3 mb-4">+ Nuevo pedido</button>
+    ${abiertos.length ? `<div class="space-y-3 mb-5">${abiertos.map(tarjeta).join("")}</div>` : `<p class="text-[13px] text-[#8a7d94] mb-5">No hay pedidos pendientes.</p>`}
+    ${cerrados.length ? `${sectionLabel("Cerrados / entregados")}<div class="space-y-3">${cerrados.map(tarjeta).join("")}</div>` : ""}
+  `;
+}
+
+function openNuevoPedido(id) {
+  window.__pedidoEditId = id || null;
+  const p = id ? window.__pedidos.find((x) => x.id === id) : null;
+  window.__pedidoItems = p ? (p.pedido_items || []).map((it) => ({ ...it })) : [{ producto_id: null, descripcion: "", cantidad: 1, precio_unitario: 0 }];
+  window.__pedidoCliente = p ? { id: p.cliente_id, nombre: p.cliente_nombre, telefono: p.telefono } : { id: null, nombre: "", telefono: "" };
+  window.__pedidoFecha = p ? p.fecha_entrega : fechaLocalHoy();
+  window.__pedidoSena = p ? p.sena : 0;
+  window.__pedidoNotas = p ? (p.notas || "") : "";
+  renderPedidoModal();
+}
+
+function renderPedidoModal() {
+  const opcCli = clientes.map((c) => `<option value="${c.id}" ${window.__pedidoCliente.id === c.id ? "selected" : ""}>${CG.escapeHtml(c.nombre)}</option>`).join("");
+  const opcProd = (sel) => `<option value="">— sin producto —</option>` + ventasVisibles().map((pr) => `<option value="${pr.id}" ${sel === pr.id ? "selected" : ""}>${CG.escapeHtml(pr.nombre)}${pr.presentacion ? " · " + CG.escapeHtml(pr.presentacion) : ""}</option>`).join("");
+  const total = window.__pedidoItems.reduce((s, it) => s + (Number(it.cantidad) || 0) * (Number(it.precio_unitario) || 0), 0);
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">${window.__pedidoEditId ? "Editar pedido" : "Nuevo pedido"}</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cliente</label>
+    <select id="pedido-cliente" onchange="window.__pedidoCliente = this.value ? {id:Number(this.value), nombre:'', telefono:''} : {id:null,nombre:'',telefono:''}; renderPedidoModal();" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-2 outline-none">
+      <option value="">— escribir a mano —</option>${opcCli}
+    </select>
+    ${!window.__pedidoCliente.id ? `
+      <div class="grid grid-cols-2 gap-2 mb-3">
+        <input id="pedido-cli-nombre" value="${CG.escapeHtml(window.__pedidoCliente.nombre || "")}" placeholder="Nombre" class="bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] outline-none" />
+        <input id="pedido-cli-tel" value="${CG.escapeHtml(window.__pedidoCliente.telefono || "")}" placeholder="Teléfono" inputmode="numeric" class="bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] outline-none" />
+      </div>` : ""}
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Fecha de entrega</label>
+    <input id="pedido-fecha" type="date" value="${window.__pedidoFecha}" onchange="window.__pedidoFecha = this.value" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Qué encarga</label>
+    <div class="space-y-2 mt-1 mb-2">
+      ${window.__pedidoItems.map((it, i) => `
+        <div class="bg-[#F7F3FA] rounded-xl p-2.5">
+          <select onchange="cambiarItemPedido(${i}, 'producto_id', this.value)" class="w-full bg-white rounded-lg px-2 py-1.5 text-[12px] mb-1.5 outline-none">${opcProd(it.producto_id)}</select>
+          <input value="${CG.escapeHtml(it.descripcion || "")}" oninput="cambiarItemPedido(${i}, 'descripcion', this.value)" placeholder="Detalle (ej: torta 3 leches, sin nueces)" class="w-full bg-white rounded-lg px-2 py-1.5 text-[12px] mb-1.5 outline-none" />
+          <div class="flex items-center gap-2">
+            <input type="number" value="${it.cantidad}" oninput="cambiarItemPedido(${i}, 'cantidad', this.value)" class="w-16 bg-white rounded-lg px-2 py-1.5 text-[12px] outline-none" />
+            <span class="text-[11px] text-[#8a7d94]">×</span>
+            <input type="number" value="${it.precio_unitario}" oninput="cambiarItemPedido(${i}, 'precio_unitario', this.value)" placeholder="precio c/u" class="flex-1 bg-white rounded-lg px-2 py-1.5 text-[12px] outline-none" />
+            ${window.__pedidoItems.length > 1 ? `<button onclick="quitarItemPedido(${i})" class="text-[#D64545] text-[16px] leading-none px-1">×</button>` : ""}
+          </div>
+        </div>`).join("")}
+    </div>
+    <button onclick="agregarItemPedido()" class="text-[12px] text-[#6B2D5C] font-semibold mb-3">+ Agregar ítem</button>
+
+    <div class="grid grid-cols-2 gap-2 mb-3">
+      <div>
+        <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Seña (opcional)</label>
+        <input id="pedido-sena" type="number" value="${window.__pedidoSena}" onchange="window.__pedidoSena = Number(this.value)||0" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+      </div>
+      <div class="flex flex-col justify-end">
+        <p class="text-[11px] text-[#8a7d94]">Total estimado</p>
+        <p class="font-mono-num text-[16px] font-semibold text-[#241C2E]">${fmt(total)}</p>
+      </div>
+    </div>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Notas</label>
+    <input id="pedido-notas" value="${CG.escapeHtml(window.__pedidoNotas)}" onchange="window.__pedidoNotas = this.value" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
+
+    <button onclick="savePedido()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">${window.__pedidoEditId ? "Guardar cambios" : "Crear pedido"}</button>
+  `);
+}
+
+function cambiarItemPedido(i, campo, valor) {
+  const it = window.__pedidoItems[i];
+  if (campo === "producto_id") {
+    it.producto_id = valor ? Number(valor) : null;
+    const pr = productos.find((p) => p.id === it.producto_id);
+    if (pr && !Number(it.precio_unitario)) it.precio_unitario = pr.precio_venta;
+    renderPedidoModal();
+    return;
+  }
+  it[campo] = (campo === "cantidad" || campo === "precio_unitario") ? Number(valor) || 0 : valor;
+}
+function agregarItemPedido() { window.__pedidoItems.push({ producto_id: null, descripcion: "", cantidad: 1, precio_unitario: 0 }); renderPedidoModal(); }
+function quitarItemPedido(i) { window.__pedidoItems.splice(i, 1); renderPedidoModal(); }
+
+async function savePedido() {
+  const cliSelId = window.__pedidoCliente.id;
+  let cliente_nombre = null, telefono = null, cliente_id = null;
+  if (cliSelId) {
+    cliente_id = cliSelId;
+    const c = clientes.find((x) => x.id === cliSelId);
+    cliente_nombre = c?.nombre; telefono = c?.telefono || null;
+  } else {
+    cliente_nombre = (document.getElementById("pedido-cli-nombre")?.value || "").trim();
+    telefono = (document.getElementById("pedido-cli-tel")?.value || "").trim() || null;
+  }
+  if (!cliente_nombre && !cliente_id) { alert("Poné un cliente."); return; }
+  const items = window.__pedidoItems.filter((it) => Number(it.cantidad) > 0 && (it.producto_id || (it.descripcion || "").trim()));
+  if (items.length === 0) { alert("Agregá al menos un ítem."); return; }
+  const total_estimado = items.reduce((s, it) => s + it.cantidad * it.precio_unitario, 0);
+  const registrado_por = usuarios[0]?.nombre || "";
+  const payload = { cliente_id, cliente_nombre, telefono, fecha_entrega: window.__pedidoFecha, sena: window.__pedidoSena || 0, total_estimado, notas: window.__pedidoNotas || null, registrado_por };
+
+  try {
+    if (window.__pedidoEditId) {
+      const { error } = await sb.from("pedidos").update(payload).eq("id", window.__pedidoEditId);
+      if (error) throw error;
+      await sb.from("pedido_items").delete().eq("pedido_id", window.__pedidoEditId);
+      await sb.from("pedido_items").insert(items.map((it) => ({ pedido_id: window.__pedidoEditId, producto_id: it.producto_id || null, descripcion: it.descripcion || null, cantidad: it.cantidad, precio_unitario: it.precio_unitario })));
+      await registrarHistorial("pedidos", window.__pedidoEditId, "editar", `Pedido editado (${cliente_nombre})`);
+    } else {
+      const { data: ped, error } = await sb.from("pedidos").insert(payload).select().single();
+      if (error) throw error;
+      await sb.from("pedido_items").insert(items.map((it) => ({ pedido_id: ped.id, producto_id: it.producto_id || null, descripcion: it.descripcion || null, cantidad: it.cantidad, precio_unitario: it.precio_unitario })));
+      await registrarHistorial("pedidos", ped.id, "crear", `Pedido creado para ${cliente_nombre} (entrega ${window.__pedidoFecha})`);
+    }
+  } catch (e) { alert("No se pudo guardar el pedido."); console.error(e); return; }
+  closeModal();
+  activeTab = "pedidos";
+  await loadAll();
+}
+
+async function cambiarEstadoPedido(id, estado) {
+  if (estado === "cancelado" && !confirm("¿Cancelar este pedido?")) return;
+  await sb.from("pedidos").update({ estado }).eq("id", id);
+  await registrarHistorial("pedidos", id, "editar", `Pedido marcado como ${estado}`);
+  activeTab = "pedidos";
+  await loadAll();
+}
+
+function avisarPedidoWhatsapp(id) {
+  const p = window.__pedidos.find((x) => x.id === id);
+  if (!p) return;
+  const items = p.pedido_items || [];
+  const total = items.reduce((s, it) => s + it.cantidad * it.precio_unitario, 0) || p.total_estimado;
+  const nombre = p.cliente_nombre || clientes.find((c) => c.id === p.cliente_id)?.nombre || "";
+  const tel = p.telefono || clientes.find((c) => c.id === p.cliente_id)?.telefono || "";
+  const L = [`Hola ${nombre}! 🙂`, `Te confirmo tu pedido en *CG Dulces*:`, ""];
+  items.forEach((it) => L.push(`• ${it.cantidad}× ${it.descripcion || productos.find((pr) => pr.id === it.producto_id)?.nombre || ""}`));
+  L.push("", `Total: ${fmt(total)}${p.sena > 0 ? ` (seña ${fmt(p.sena)}, resta ${fmt(total - p.sena)})` : ""}`);
+  L.push(`Entrega: ${new Date(p.fecha_entrega + "T12:00:00").toLocaleDateString("es-PY")}`);
+  L.push("", "¡Gracias! 🍬");
+  CG.abrirWhatsApp(tel, L.join("\n"));
+}
+
+async function concretarPedido(id) {
+  const p = window.__pedidos.find((x) => x.id === id);
+  if (!p) return;
+  if (!cajaRequerida()) return;
+  const items = p.pedido_items || [];
+  if (items.length === 0) { alert("El pedido no tiene ítems."); return; }
+  if (!confirm("¿Concretar este pedido como venta? Se va a descontar el stock de los ítems que sean productos, y se registra la venta a cuenta del cliente (fiado). Podés cobrarla desde Clientes.")) return;
+
+  const lineas = items.map((it) => ({
+    producto_id: it.producto_id || null,
+    cantidad: it.cantidad,
+    precio_unitario: it.precio_unitario,
+    costo_unitario: productos.find((pr) => pr.id === it.producto_id)?.costo_ultimo || 0,
+    descuento: 0,
+    subtotal: it.cantidad * it.precio_unitario,
+    descontar_stock: !!it.producto_id,
+  }));
+  const total = lineas.reduce((s, l) => s + l.subtotal, 0);
+  try {
+    await CG.rpc.registrarVenta({
+      cliente_id: p.cliente_id || null,
+      registrado_por: usuarios[0]?.nombre || "",
+      es_fiado: true, medio_pago: "fiado",
+      monto_efectivo: 0, monto_transferencia: 0,
+      subtotal: total, descuento_total: 0, total,
+      pedido_id: id,
+      items: lineas,
+    });
+  } catch (e) { alert(e.message); console.error(e); return; }
+  activeTab = "pedidos";
+  await loadAll();
+  alert("Venta registrada. El pedido quedó como entregado. Si el cliente ya pagó (o dejó seña), cobralo desde Clientes.");
+}
+
+// ---------- Análisis del negocio ----------
+window.__analisis = null;
+let analisisChartHora = null, analisisChartDia = null;
+
+async function abrirAnalisis() {
+  activeTab = "analisis";
+  render();
+  const [rent, muerto, venc, hora, dia] = await Promise.all([
+    sb.from("v_producto_rentabilidad").select("*").order("ganancia_90d", { ascending: false }).limit(10),
+    sb.from("v_stock_muerto").select("*").limit(15),
+    sb.from("v_vencimientos").select("*").limit(15),
+    sb.from("v_ventas_por_hora").select("*"),
+    sb.from("v_ventas_por_dia_semana").select("*"),
+  ]);
+  window.__analisis = { rent: rent.data || [], muerto: muerto.data || [], venc: venc.data || [], hora: hora.data || [], dia: dia.data || [] };
+  render();
+}
+
+function renderAnalisis(content) {
+  const a = window.__analisis;
+  if (!a) { content.innerHTML = `<button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>${sectionLabel("Análisis del negocio")}<p class="text-[13px] text-[#8a7d94]">Cargando...</p>`; return; }
+
+  const filaRent = (r) => `
+    <div class="flex items-center justify-between text-[12px] py-1">
+      <span class="text-[#241C2E] truncate pr-2">${CG.escapeHtml(r.nombre)}</span>
+      <span class="font-mono-num shrink-0">${fmt(r.ganancia_90d)} <span class="text-[#8a7d94]">(${r.margen_actual_pct ?? "–"}%)</span></span>
+    </div>`;
+  const filaMuerto = (r) => `
+    <div class="flex items-center justify-between text-[12px] py-1">
+      <span class="text-[#241C2E] truncate pr-2">${CG.escapeHtml(r.nombre)}</span>
+      <span class="font-mono-num shrink-0 text-[#D64545]">${fmt(r.plata_dormida)} <span class="text-[#8a7d94]">${r.dias_sin_vender ?? "—"}d</span></span>
+    </div>`;
+  const filaVenc = (r) => {
+    const d = r.dias_para_vencer;
+    const col = d == null ? "#8a7d94" : d < 0 ? "#D64545" : d <= 7 ? "#F2994A" : "#8a7d94";
+    return `<div class="flex items-center justify-between text-[12px] py-1">
+      <span class="text-[#241C2E] truncate pr-2">${CG.escapeHtml(r.producto)}${r.presentacion ? " · " + CG.escapeHtml(r.presentacion) : ""}</span>
+      <span class="font-mono-num shrink-0" style="color:${col}">${d == null ? "sin fecha" : d < 0 ? `venció hace ${-d}d` : `en ${d}d`}</span>
+    </div>`;
+  };
+
+  content.innerHTML = `
+    <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
+    ${sectionLabel("Análisis del negocio")}
+
+    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
+      ${sectionLabel("Ganancia por producto (últimos 90 días)")}
+      ${a.rent.length ? a.rent.map(filaRent).join("") : `<p class="text-[12px] text-[#8a7d94]">Sin datos todavía.</p>`}
+    </div>
+
+    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
+      ${sectionLabel("Stock muerto (no se vende hace 60+ días)")}
+      ${a.muerto.length ? a.muerto.map(filaMuerto).join("") : `<p class="text-[12px] text-[#2F9E7A]">✓ Nada dormido.</p>`}
+    </div>
+
+    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
+      ${sectionLabel("Vencimientos próximos")}
+      ${a.venc.length ? a.venc.map(filaVenc).join("") : `<p class="text-[12px] text-[#8a7d94]">No hay lotes con vencimiento cargado. Se cargan solos al comprar productos que tengan "vida útil" configurada.</p>`}
+    </div>
+
+    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
+      ${sectionLabel("¿A qué hora vendés más?")}
+      <div class="h-[140px]"><canvas id="analisisHora"></canvas></div>
+    </div>
+    <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+      ${sectionLabel("¿Qué día vendés más?")}
+      <div class="h-[140px]"><canvas id="analisisDia"></canvas></div>
+    </div>
+  `;
+
+  const optsBar = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => fmt(c.raw) } } }, scales: { y: { display: false }, x: { grid: { display: false } } } };
+  const horas = Array.from({ length: 24 }, (_, h) => a.hora.find((x) => x.hora === h)?.total || 0);
+  if (analisisChartHora) analisisChartHora.destroy();
+  analisisChartHora = new Chart(document.getElementById("analisisHora"), {
+    type: "bar",
+    data: { labels: Array.from({ length: 24 }, (_, h) => `${h}`), datasets: [{ data: horas, backgroundColor: "#6B2D5C", borderRadius: 4 }] },
+    options: optsBar,
+  });
+  const nomDias = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+  const dias = nomDias.map((_, i) => a.dia.find((x) => x.dia_num === i + 1)?.total || 0);
+  if (analisisChartDia) analisisChartDia.destroy();
+  analisisChartDia = new Chart(document.getElementById("analisisDia"), {
+    type: "bar",
+    data: { labels: nomDias, datasets: [{ data: dias, backgroundColor: "#2F9E7A", borderRadius: 6 }] },
+    options: optsBar,
+  });
 }
 
 // ---------- Reportes ----------
