@@ -20,10 +20,10 @@
  * ===================================================================== */
 (function (root) {
   "use strict";
-  const sb = root.sbClient;
   const traducir = (root.CG && root.CG.errorRPC) || ((e) => (e && e.message) || "Error");
 
   async function call(fn, args) {
+    const sb = root.sbClient || root.sb;
     if (!sb) throw new Error("Sin conexión a la base.");
     const { data, error } = await sb.rpc(fn, args);
     if (error) throw new Error(traducir(error));

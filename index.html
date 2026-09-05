@@ -129,6 +129,7 @@
 const SUPABASE_URL = "https://amfcmrvksewtqqadiuii.supabase.co";
 const SUPABASE_KEY = "sb_publishable_oVCLDcffzu2l2aQxLzcexg_jbzsDaUi";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+window.sb = sb; // usado por js/rpc.js para llamar a las funciones transaccionales
 
 const PALETTE = ["#6B2D5C","#F2994A","#2F9E7A","#D6608A","#8A4B2E","#D9A441","#4A7C9E","#7C5C9E"];
 const HELADOS_OCULTO = "Helados"; // se habilita en la próxima etapa
@@ -3723,11 +3724,16 @@ async function confirmSale() {
 
   let monto_efectivo = 0, monto_transferencia = 0;
 
-  // Validar que haya stock suficiente de todo antes de tocar la base de datos
+  // Aviso rápido si algo claramente no alcanza (la RPC vuelve a validar esto
+  // mismo de forma atómica justo antes de escribir, así que esto es solo
+  // para no hacerte esperar el viaje al servidor si ya se ve que no alcanza).
   for (const [id, qty] of items) {
     const p = productos.find((pr) => pr.id === Number(id));
     if (qty > p.stock) { alert(`No hay suficiente stock de "${p.nombre}". Disponible: ${p.stock}.`); return; }
   }
+
+  const consumiblesIlimitados = [];
+  const stockExtra = [];
 
   // Pajitas: uso ilimitado mientras haya un paquete abierto (igual que cucharita/servilleta)
   const totalPajitas = items.reduce((s, [id, qty]) => s + (pajitasCart[Number(id)] || 0), 0);
@@ -3735,6 +3741,7 @@ async function confirmSale() {
     const pajita = insumoPorNombre("Pajita");
     const checkPajita = await validarConsumoIlimitado(pajita, totalPajitas);
     if (!checkPajita.ok) { alert(checkPajita.mensaje); return; }
+    if (pajita) consumiblesIlimitados.push({ producto_id: pajita.id, cantidad: totalPajitas });
   }
 
   if (heladoCart.length > 0) {
@@ -3755,10 +3762,11 @@ async function confirmSale() {
       if (h.servilleta) servilletaNecesario += 1;
       if (h.cobertura && h.coberturaId) coberturaPorSabor[h.coberturaId] = (coberturaPorSabor[h.coberturaId] || 0) + 1;
     });
-    // Envase y pote: siguen con stock normal (limitado)
+    // Envase y pote: siguen con stock normal (limitado) — se validan y descuentan igual que un producto más
     for (const [id, necesario] of Object.entries(necesarioPorId)) {
       const p = productos.find((pr) => pr.id === Number(id));
       if (p && necesario > p.stock) { alert(`No hay suficiente stock de "${p.nombre}". Disponible: ${p.stock}, necesitás ${necesario}.`); return; }
+      stockExtra.push({ producto_id: Number(id), cantidad: necesario });
     }
     // Baldes, cucharita, servilleta y cobertura (por sabor): uso ilimitado mientras haya un paquete/balde abierto
     const validarIlimitado = async (producto, necesario) => {
@@ -3767,12 +3775,18 @@ async function confirmSale() {
       return r.ok;
     };
     for (const saborId of Object.keys(bolasPorBalde)) {
-      if (!(await validarIlimitado(productos.find((pr) => pr.id === Number(saborId)), bolasPorBalde[saborId]))) return;
+      const cant = bolasPorBalde[saborId];
+      if (!(await validarIlimitado(productos.find((pr) => pr.id === Number(saborId)), cant))) return;
+      consumiblesIlimitados.push({ producto_id: Number(saborId), cantidad: cant });
     }
     if (!(await validarIlimitado(cucharita, cucharitaNecesario))) return;
+    if (cucharita && cucharitaNecesario > 0) consumiblesIlimitados.push({ producto_id: cucharita.id, cantidad: cucharitaNecesario });
     if (!(await validarIlimitado(servilleta, servilletaNecesario))) return;
+    if (servilleta && servilletaNecesario > 0) consumiblesIlimitados.push({ producto_id: servilleta.id, cantidad: servilletaNecesario });
     for (const saborId of Object.keys(coberturaPorSabor)) {
-      if (!(await validarIlimitado(productos.find((pr) => pr.id === Number(saborId)), coberturaPorSabor[saborId]))) return;
+      const cant = coberturaPorSabor[saborId];
+      if (!(await validarIlimitado(productos.find((pr) => pr.id === Number(saborId)), cant))) return;
+      consumiblesIlimitados.push({ producto_id: Number(saborId), cantidad: cant });
     }
   }
 
@@ -3783,12 +3797,12 @@ async function confirmSale() {
     costo_unitario: l.producto.costo_ultimo, descuento: l.descuento, subtotal: l.subtotal,
   }));
 
-  // Líneas de helados armados
+  // Líneas de helados armados (no descuentan stock propio: lo suyo va por stockExtra/consumiblesIlimitados)
   heladoCart.forEach((h) => {
     const producto = productos.find((p) => p.id === h.productoId);
     const cantidad = h.tipo === "bola" ? h.bolas.length : 1;
     subtotalTotal += h.total;
-    lineas.push({ producto_id: producto.id, cantidad, precio_unitario: producto.precio_venta, costo_unitario: producto.costo_ultimo, descuento: 0, subtotal: h.total });
+    lineas.push({ producto_id: producto.id, cantidad, precio_unitario: producto.precio_venta, costo_unitario: producto.costo_ultimo, descuento: 0, subtotal: h.total, _esHelado: true });
   });
 
   // Descuento manual: se reparte proporcionalmente entre todas las líneas de la venta
@@ -3820,69 +3834,30 @@ async function confirmSale() {
     }
   }
 
-  const { data: venta, error: ventaError } = await sb
-    .from("ventas")
-    .insert({ subtotal: subtotalTotal, descuento_total: descuentoTotal, total, medio_pago, registrado_por, cliente_id, es_fiado, monto_efectivo, monto_transferencia, created_at })
-    .select().single();
-  if (ventaError) { alert("No se pudo registrar la venta."); console.error(ventaError); return; }
+  const usuario_app_id = usuarios.find((u) => u.nombre === registrado_por)?.id || null;
 
-  const itemsToInsert = lineas.map((l) => ({ ...l, venta_id: venta.id }));
-  await sb.from("venta_items").insert(itemsToInsert);
-
-  // Descontar stock de productos normales
-  for (const [id, qty] of items) {
-    const p = productos.find((pr) => pr.id === Number(id));
-    await sb.from("productos").update({ stock: p.stock - qty }).eq("id", p.id);
+  let ventaId;
+  try {
+    ventaId = await CG.rpc.registrarVenta({
+      cliente_id, usuario_app_id, registrado_por, es_fiado, medio_pago,
+      monto_efectivo, monto_transferencia,
+      subtotal: subtotalTotal, descuento_total: descuentoTotal, total, created_at,
+      items: lineas.map((l) => ({
+        producto_id: l.producto_id, cantidad: l.cantidad, precio_unitario: l.precio_unitario,
+        costo_unitario: l.costo_unitario, descuento: l.descuento, subtotal: l.subtotal,
+        descontar_stock: !l._esHelado,
+      })),
+      stock_extra: stockExtra,
+      consumibles_ilimitados: consumiblesIlimitados,
+    });
+  } catch (e) {
+    alert(e.message);
+    console.error(e);
+    return;
   }
 
-  // Pajitas de todos los productos que las llevan, en esta venta
-  if (totalPajitas > 0) {
-    await aplicarConsumoIlimitado(insumoPorNombre("Pajita"), totalPajitas);
-  }
-
-  // Descontar insumos de cada helado armado
-  const cucharita = insumoPorNombre("Cucharita");
-  const servilleta = insumoPorNombre("Servilleta");
-  const poteIsopor = insumoPorNombre("Pote de Isopor 1/4");
-
-  // Bolas totales por sabor en toda la venta
-  const bolasPorSaborTotal = {};
-  heladoCart.forEach((h) => h.bolas.forEach((id) => { bolasPorSaborTotal[id] = (bolasPorSaborTotal[id] || 0) + 1; }));
-  for (const [saborId, cant] of Object.entries(bolasPorSaborTotal)) {
-    await aplicarConsumoIlimitado(productos.find((p) => p.id === Number(saborId)), cant);
-  }
-
-  // Cucharita (solo helados en vasito) y servilleta (según se eligió): ilimitados
-  const vasitoDesc = insumoPorNombre("Vasito");
-  const cucharitaTotal = heladoCart.filter((h) => (h.tipo === "bola" && vasitoDesc && h.envaseId === vasitoDesc.id) || h.tipo === "pote14").length;
-  const servilletaTotal = heladoCart.filter((h) => h.servilleta).length;
-  await aplicarConsumoIlimitado(cucharita, cucharitaTotal);
-  await aplicarConsumoIlimitado(servilleta, servilletaTotal);
-
-  // Cobertura: por sabor elegido, también ilimitada
-  const coberturaPorSaborTotal = {};
-  heladoCart.forEach((h) => { if (h.cobertura && h.coberturaId) coberturaPorSaborTotal[h.coberturaId] = (coberturaPorSaborTotal[h.coberturaId] || 0) + 1; });
-  for (const [saborId, cant] of Object.entries(coberturaPorSaborTotal)) {
-    await aplicarConsumoIlimitado(productos.find((p) => p.id === Number(saborId)), cant);
-  }
-
-  for (const h of heladoCart) {
-    // Envase (vasito/cucurucho) y pote: siguen con stock limitado normal
-    if (h.tipo === "bola" && h.envaseId) {
-      const envase = productos.find((p) => p.id === h.envaseId);
-      if (envase) await sb.from("productos").update({ stock: envase.stock - 1 }).eq("id", envase.id);
-    }
-    if (h.tipo === "pote14" && poteIsopor) {
-      await sb.from("productos").update({ stock: poteIsopor.stock - 1 }).eq("id", poteIsopor.id);
-    }
-  }
-
-  // Registrar el/los movimiento(s) en caja (solo si no es fiado; lo fiado entra cuando se cobra)
-  if (!es_fiado) {
-    if (monto_efectivo > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "venta", monto: monto_efectivo, medio_pago: "efectivo", venta_id: venta.id, fecha: created_at, descripcion: `Venta #${venta.id}` });
-    if (monto_transferencia > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "venta", monto: monto_transferencia, medio_pago: "transferencia", venta_id: venta.id, fecha: created_at, descripcion: `Venta #${venta.id}` });
-  }
-  await registrarHistorial("ventas", venta.id, "crear", `Venta de ${fmt(total)} por ${registrado_por}${es_fiado ? " (fiado)" : ""}${cliente_id ? " a " + (clientes.find((c) => c.id === cliente_id)?.nombre || "cliente") : ""}`);
+  const clienteObj = clientes.find((c) => c.id === cliente_id) || null;
+  const datosVenta = { id: ventaId, created_at, total, descuento_total: descuentoTotal, es_fiado, medio_pago };
 
   cart = {};
   pajitasCart = {};
@@ -3890,11 +3865,48 @@ async function confirmSale() {
   closeModal();
   activeTab = "dashboard";
   await loadAll();
+  mostrarVentaConfirmada(datosVenta, lineas, clienteObj);
 
   } finally {
     procesandoVenta = false;
     if (btnConfirmar) { btnConfirmar.disabled = false; btnConfirmar.textContent = "Registrar venta"; btnConfirmar.classList.remove("opacity-60"); }
   }
+}
+
+// Pantalla de éxito tras registrar una venta, con botón para mandar el
+// comprobante por WhatsApp (al teléfono del cliente si lo tiene guardado,
+// o abriendo el selector de contactos de WhatsApp si no).
+function mostrarVentaConfirmada(datosVenta, lineasVenta, clienteObj) {
+  const itemsRecibo = lineasVenta.map((l) => {
+    const p = productos.find((pr) => pr.id === l.producto_id);
+    return { cantidad: l.cantidad, nombre: p?.nombre || "", presentacion: p?.presentacion || "", subtotal: l.subtotal };
+  });
+  window.__ultimoComprobanteTexto = CG.ticketVenta({
+    negocio: "CG Dulces",
+    venta: { ...datosVenta, cliente_nombre: clienteObj?.nombre },
+    items: itemsRecibo,
+    pagado: datosVenta.es_fiado ? 0 : datosVenta.total,
+  });
+  window.__ultimoComprobanteTel = clienteObj?.telefono || "";
+
+  showModal(`
+    <div class="text-center mb-5">
+      <div class="w-14 h-14 rounded-full bg-[#2F9E7A]/15 flex items-center justify-center mx-auto mb-3">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#2F9E7A" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+      <p class="font-display text-[18px] font-semibold text-[#241C2E]">¡Venta registrada!</p>
+      <p class="font-mono-num text-[22px] font-semibold text-[#2F9E7A] mt-1">${fmt(datosVenta.total)}</p>
+    </div>
+    <button onclick="enviarUltimoComprobante()" class="w-full bg-[#25D366] text-white font-semibold rounded-xl py-3 mb-2.5 flex items-center justify-center gap-2">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91S17.5 2 12.04 2zm5.8 14.16c-.24.68-1.19 1.25-1.95 1.41-.52.11-1.2.2-3.48-.75-2.92-1.21-4.8-4.17-4.94-4.36-.14-.19-1.18-1.57-1.18-3 0-1.43.75-2.13 1.02-2.42.27-.29.58-.36.78-.36.19 0 .39 0 .56.01.18.01.42-.07.65.5.24.58.82 2 .89 2.15.07.15.11.32.02.51-.09.19-.14.31-.27.48-.14.17-.29.37-.41.5-.14.14-.28.29-.12.57.16.28.71 1.18 1.53 1.91 1.05.94 1.94 1.23 2.22 1.37.28.14.44.12.6-.07.16-.19.68-.79.87-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.32.06.11.06.66-.18 1.34z"/></svg>
+      Enviar comprobante por WhatsApp
+    </button>
+    <button onclick="closeModal()" class="w-full bg-[#F7F3FA] text-[#241C2E] font-semibold rounded-xl py-3">Listo</button>
+  `);
+}
+
+function enviarUltimoComprobante() {
+  CG.abrirWhatsApp(window.__ultimoComprobanteTel || "", window.__ultimoComprobanteTexto || "");
 }
 
 // ---------- Edición / alta de productos ----------
@@ -4230,6 +4242,8 @@ checkSession();
 
 <!-- Librería compartida (escape de HTML, WhatsApp, CSV, cierre, errores) -->
 <script src="js/lib/util.js"></script>
+<!-- Envoltorio de las funciones transaccionales seguras (CG.rpc.*) -->
+<script src="js/rpc.js"></script>
 <!-- Registro del Service Worker + aviso de "sin internet" -->
 <script src="js/pwa.js"></script>
 </body>
