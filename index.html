@@ -729,18 +729,66 @@ async function saveCerrarCaja(efectivoCalculado, bancoCalculado) {
   if (procesandoAccion) return;
   procesandoAccion = true;
   try {
+  const cajaId = cajaActual.id;
   const valorEfectivo = document.getElementById("caja-cierre-efectivo").value;
   const valorBanco = document.getElementById("caja-cierre-banco").value;
-  const cierre_efectivo = valorEfectivo ? Number(valorEfectivo) : efectivoCalculado;
-  const cierre_banco = valorBanco ? Number(valorBanco) : bancoCalculado;
-  const { error } = await sb.from("caja").update({ estado: "cerrada", fecha_cierre: new Date().toISOString(), cierre_efectivo, cierre_banco }).eq("id", cajaActual.id);
-  if (error) { alert("No se pudo cerrar la caja."); console.error(error); return; }
-  await registrarHistorial("caja", cajaActual.id, "editar", `Caja cerrada — efectivo ${fmt(cierre_efectivo)}, banco ${fmt(cierre_banco)}`);
+  try {
+    await CG.rpc.cerrarCaja(
+      cajaId,
+      valorEfectivo !== "" ? Number(valorEfectivo) : null,
+      valorBanco !== "" ? Number(valorBanco) : null,
+      usuarios[0]?.nombre || ""
+    );
+  } catch (e) { alert(e.message); console.error(e); return; }
   closeModal();
   await loadAll();
+  await mostrarCierreCompartible(cajaId);
   } finally {
     procesandoAccion = false;
   }
+}
+
+// Trae el resumen de una caja (v_cierre_caja) y lo muestra con botón para
+// compartirlo por WhatsApp (un "cierre Z" listo para mandar).
+async function mostrarCierreCompartible(cajaId) {
+  const { data, error } = await sb.from("v_cierre_caja").select("*").eq("caja_id", cajaId).maybeSingle();
+  if (error || !data) { console.error(error); return; }
+  window.__ultimoCierreTexto = CG.resumenCierre(data);
+  const chip = (n) => n == null ? "" : (Math.abs(Number(n)) < 1
+    ? `<span class="text-[#2F9E7A] font-semibold">cuadra</span>`
+    : (n > 0 ? `<span class="text-[#F2994A] font-semibold">sobra ${fmt(n)}</span>` : `<span class="text-[#D64545] font-semibold">falta ${fmt(-n)}</span>`));
+  const fila = (l, v, extra = "") => `<div class="flex justify-between"><span class="text-[#8a7d94]">${l}</span><span class="font-mono-num">${v}${extra}</span></div>`;
+  showModal(`
+    <div class="text-center mb-4">
+      <p class="font-display text-[18px] font-semibold text-[#241C2E]">${data.estado === "cerrada" ? "Caja cerrada" : "Resumen de caja"}</p>
+      <p class="text-[12px] text-[#8a7d94] mt-1">Cierre #${cajaId}</p>
+    </div>
+    <div class="bg-[#F7F3FA] rounded-xl p-3.5 mb-4 space-y-1.5 text-[13px]">
+      ${fila("Ventas efectivo", fmt(data.ventas_efectivo))}
+      ${fila("Ventas transf/QR", fmt(data.ventas_banco))}
+      ${fila("Cobros de fiado", fmt(Number(data.cobros_efectivo) + Number(data.cobros_banco)))}
+      ${fila("Ingresos extra", fmt(data.ingresos_extra))}
+      ${fila("Retiros", "−" + fmt(data.retiros))}
+      ${fila("Compras", "−" + fmt(data.compras))}
+      ${fila("Nº de ventas", data.nro_ventas)}
+      <div class="border-t border-black/[0.06] my-1"></div>
+      ${fila("Efectivo esperado", fmt(data.esperado_efectivo))}
+      ${data.cierre_efectivo != null ? fila("Efectivo contado", fmt(data.cierre_efectivo), " · " + chip(data.diferencia_efectivo)) : ""}
+      ${fila("Banco esperado", fmt(data.esperado_banco))}
+      ${data.cierre_banco != null ? fila("Banco contado", fmt(data.cierre_banco), " · " + chip(data.diferencia_banco)) : ""}
+    </div>
+    <button onclick="CG.abrirWhatsApp('', window.__ultimoCierreTexto)" class="w-full bg-[#25D366] text-white font-semibold rounded-xl py-3 mb-2.5 flex items-center justify-center gap-2">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91S17.5 2 12.04 2zm5.8 14.16c-.24.68-1.19 1.25-1.95 1.41-.52.11-1.2.2-3.48-.75-2.92-1.21-4.8-4.17-4.94-4.36-.14-.19-1.18-1.57-1.18-3 0-1.43.75-2.13 1.02-2.42.27-.29.58-.36.78-.36.19 0 .39 0 .56.01.18.01.42-.07.65.5.24.58.82 2 .89 2.15.07.15.11.32.02.51-.09.19-.14.31-.27.48-.14.17-.29.37-.41.5-.14.14-.28.29-.12.57.16.28.71 1.18 1.53 1.91 1.05.94 1.94 1.23 2.22 1.37.28.14.44.12.6-.07.16-.19.68-.79.87-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.32.06.11.06.66-.18 1.34z"/></svg>
+      Compartir por WhatsApp
+    </button>
+    <button onclick="closeModal()" class="w-full bg-[#F7F3FA] text-[#241C2E] font-semibold rounded-xl py-3">Listo</button>
+  `);
+}
+
+// Comparte el resumen de la caja abierta ahora mismo (una foto del día sin cerrarla)
+function compartirCierreActual() {
+  if (!cajaActual) { alert("No hay ninguna caja abierta."); return; }
+  mostrarCierreCompartible(cajaActual.id);
 }
 
 function openMovimientoCaja(tipo) {
@@ -2580,7 +2628,7 @@ async function renderDetalleCaja(content) {
     <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
     ${sectionLabel("Detalle de caja · Historial completo")}
 
-    <div class="grid grid-cols-2 gap-3 mb-4">
+    <div class="grid grid-cols-2 gap-3 mb-3">
       <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
         <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Efectivo hoy (calculado)</p>
         <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(efectivoFinal)}</p>
@@ -2590,6 +2638,12 @@ async function renderDetalleCaja(content) {
         <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(bancoFinal)}</p>
       </div>
     </div>
+
+    ${cajaActual ? `
+    <button onclick="compartirCierreActual()" class="w-full bg-white border border-black/[0.06] rounded-xl px-4 py-2.5 mb-4 flex items-center justify-center gap-2">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="#25D366"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91S17.5 2 12.04 2zm5.8 14.16c-.24.68-1.19 1.25-1.95 1.41-.52.11-1.2.2-3.48-.75-2.92-1.21-4.8-4.17-4.94-4.36-.14-.19-1.18-1.57-1.18-3 0-1.43.75-2.13 1.02-2.42.27-.29.58-.36.78-.36.19 0 .39 0 .56.01.18.01.42-.07.65.5.24.58.82 2 .89 2.15.07.15.11.32.02.51-.09.19-.14.31-.27.48-.14.17-.29.37-.41.5-.14.14-.28.29-.12.57.16.28.71 1.18 1.53 1.91 1.05.94 1.94 1.23 2.22 1.37.28.14.44.12.6-.07.16-.19.68-.79.87-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.32.06.11.06.66-.18 1.34z"/></svg>
+      <span class="text-[12px] text-[#6B2D5C] font-semibold">Compartir resumen de la caja de hoy</span>
+    </button>` : ""}
 
     ${huerfanosTotal.length > 0 ? `
     <div class="bg-[#D64545]/10 border border-[#D64545]/25 rounded-xl p-4 mb-4">
