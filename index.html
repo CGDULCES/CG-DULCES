@@ -338,6 +338,20 @@ function cantidadGrupoEnCarrito(promo) {
 
 // Calcula todas las líneas del carrito aplicando promociones que combinan
 // productos de la misma categoría (ej: 2 alfajores de sabores distintos)
+// Precio unitario que corresponde a este producto según la cantidad:
+// si tiene precio mayorista y se llega al mínimo, usa ese; si no, el normal.
+function precioEfectivo(producto, cantidad) {
+  if (producto && producto.precio_mayorista != null && producto.mayorista_min_cant != null
+      && Number(cantidad) >= Number(producto.mayorista_min_cant) && Number(producto.precio_mayorista) > 0) {
+    return Number(producto.precio_mayorista);
+  }
+  return Number(producto?.precio_venta || 0);
+}
+function esPrecioMayorista(producto, cantidad) {
+  return producto && producto.precio_mayorista != null && producto.mayorista_min_cant != null
+    && Number(cantidad) >= Number(producto.mayorista_min_cant) && Number(producto.precio_mayorista) > 0;
+}
+
 function calcularCarritoPromos() {
   const entradas = Object.entries(cart)
     .filter(([, q]) => q > 0)
@@ -356,7 +370,7 @@ function calcularCarritoPromos() {
 
   Object.values(grupos).forEach((g) => {
     const totalQty = g.items.reduce((s, it) => s + it.cantidad, 0);
-    const normalTotal = g.items.reduce((s, it) => s + it.producto.precio_venta * it.cantidad, 0);
+    const normalTotal = g.items.reduce((s, it) => s + precioEfectivo(it.producto, it.cantidad) * it.cantidad, 0);
 
     if (g.promo && totalQty >= g.promo.cantidad_requerida) {
       const gruposCompletos = Math.floor(totalQty / g.promo.cantidad_requerida);
@@ -366,7 +380,7 @@ function calcularCarritoPromos() {
       const descuento = normalTotal - promoTotal;
 
       g.items.forEach((it) => {
-        const parteNormal = it.producto.precio_venta * it.cantidad;
+        const parteNormal = precioEfectivo(it.producto, it.cantidad) * it.cantidad;
         const parteDescuento = normalTotal > 0 ? descuento * (parteNormal / normalTotal) : 0;
         lineas.push({ producto: it.producto, cantidad: it.cantidad, subtotal: parteNormal - parteDescuento, descuento: parteDescuento });
         subtotalTotal += parteNormal;
@@ -374,7 +388,7 @@ function calcularCarritoPromos() {
       });
     } else {
       g.items.forEach((it) => {
-        const subtotal = it.producto.precio_venta * it.cantidad;
+        const subtotal = precioEfectivo(it.producto, it.cantidad) * it.cantidad;
         lineas.push({ producto: it.producto, cantidad: it.cantidad, subtotal, descuento: 0 });
         subtotalTotal += subtotal;
       });
@@ -954,14 +968,18 @@ function renderTarjetaProducto(p, cat) {
   const promo = promoParaProducto(p);
   const promoActiva = promo && cantidadGrupoEnCarrito(promo) >= promo.cantidad_requerida;
   const pajitas = pajitasCart[p.id] || 0;
+  const mayoristaOn = esPrecioMayorista(p, qty);
+  const precioMostrar = mayoristaOn ? Number(p.precio_mayorista) : Number(p.precio_venta);
   return `
   <div class="bg-white rounded-2xl p-3.5 shadow-sm border border-black/[0.04] flex flex-col gap-2">
+    ${p.foto_url ? `<img src="${p.foto_url}" alt="" class="w-full h-20 object-cover rounded-lg" loading="lazy" />` : ""}
     <div class="flex items-center gap-1.5">
       <span class="w-2 h-2 rounded-full shrink-0" style="background:${color}"></span>
       <span class="text-[10px] uppercase tracking-wide text-[#8a7d94] font-semibold truncate">${p.presentacion || cat}</span>
     </div>
     <p class="text-[13px] font-semibold text-[#241C2E] leading-tight">${p.nombre}</p>
-    <p class="font-mono-num text-[13px] text-[#6B2D5C] font-semibold">${fmt(p.precio_venta)}</p>
+    <p class="font-mono-num text-[13px] font-semibold ${mayoristaOn ? "text-[#2F9E7A]" : "text-[#6B2D5C]"}">${fmt(precioMostrar)}${mayoristaOn ? " · mayorista" : ""}</p>
+    ${(p.precio_mayorista != null && p.mayorista_min_cant != null && !mayoristaOn) ? `<p class="text-[10px] text-[#8a7d94]">Desde ${p.mayorista_min_cant}u: ${fmt(p.precio_mayorista)} c/u</p>` : ""}
     ${promo ? `<p class="text-[10px] text-[#2F9E7A] font-medium">${promoActiva ? "✓ Promo aplicada" : `Promo ${promo.cantidad_requerida}x ${fmt(promo.precio_promocional)}${promo.categoria_id ? " (combinable)" : ""}`}</p>` : ""}
     <div class="flex items-center justify-between mt-1">
       <button onclick="changeQty(${p.id}, -1)" class="w-7 h-7 rounded-full bg-[#F7F3FA] flex items-center justify-center" ${qty===0?"disabled style='opacity:.3'":""}>−</button>
@@ -4217,9 +4235,10 @@ async function confirmSale() {
   const calculo = calcularCarritoPromos();
   let subtotalTotal = calculo.subtotalTotal, descuentoTotal = calculo.descuentoTotal;
   const lineas = calculo.lineas.map((l) => ({
-    producto_id: l.producto.id, cantidad: l.cantidad, precio_unitario: l.producto.precio_venta,
+    producto_id: l.producto.id, cantidad: l.cantidad, precio_unitario: precioEfectivo(l.producto, l.cantidad),
     costo_unitario: l.producto.costo_ultimo, descuento: l.descuento, subtotal: l.subtotal,
   }));
+  const usoMayorista = calculo.lineas.some((l) => esPrecioMayorista(l.producto, l.cantidad));
 
   // Líneas de helados armados (no descuentan stock propio: lo suyo va por stockExtra/consumiblesIlimitados)
   heladoCart.forEach((h) => {
@@ -4264,6 +4283,7 @@ async function confirmSale() {
   try {
     ventaId = await CG.rpc.registrarVenta({
       cliente_id, usuario_app_id, registrado_por, es_fiado, medio_pago,
+      es_mayorista: usoMayorista,
       monto_efectivo, monto_transferencia,
       subtotal: subtotalTotal, descuento_total: descuentoTotal, total, created_at,
       items: lineas.map((l) => ({
@@ -4393,6 +4413,41 @@ async function openEditProduct(id) {
           <input id="edit-costo" type="number" value="${p.costo_ultimo}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
         </div>
       </div>
+
+      <details class="bg-[#F7F3FA] rounded-xl p-3">
+        <summary class="text-[12px] font-semibold text-[#241C2E] cursor-pointer">Más detalles (mayorista, foto, proveedor, vencimiento)</summary>
+        <div class="space-y-3 mt-3">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Precio mayorista</label>
+              <input id="edit-precio-may" type="number" value="${p.precio_mayorista ?? ""}" placeholder="opcional" class="w-full bg-white rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+            </div>
+            <div>
+              <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Desde cuántas u.</label>
+              <input id="edit-may-min" type="number" value="${p.mayorista_min_cant ?? ""}" placeholder="Ej: 6" class="w-full bg-white rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+            </div>
+          </div>
+          <div>
+            <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Proveedor habitual</label>
+            <select id="edit-prov-hab" class="w-full bg-white rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none">
+              <option value="">— ninguno —</option>
+              ${proveedores.map((pr) => `<option value="${pr.id}" ${pr.id === p.proveedor_habitual_id ? "selected" : ""}>${CG.escapeHtml(pr.nombre)}</option>`).join("")}
+            </select>
+          </div>
+          <div>
+            <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Vida útil (días) — para avisar vencimientos</label>
+            <input id="edit-vida-util" type="number" value="${p.vida_util_dias ?? ""}" placeholder="Ej: 30 (dejalo vacío si no vence)" class="w-full bg-white rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+          </div>
+          <div>
+            <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Foto</label>
+            <div class="flex items-center gap-3 mt-1">
+              <img id="edit-foto-preview" src="${p.foto_url || ""}" class="w-14 h-14 rounded-lg object-cover bg-white ${p.foto_url ? "" : "hidden"}" />
+              <input id="edit-foto-file" type="file" accept="image/*" onchange="subirFotoProducto(${p.id}, this.files[0])" class="text-[12px]" />
+            </div>
+            <p id="edit-foto-msg" class="text-[11px] text-[#8a7d94] mt-1"></p>
+          </div>
+        </div>
+      </details>
     </div>
     <button onclick="saveEditProduct(${p.id})" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3 mt-5">Guardar cambios</button>
     ${esConsumibleIlimitado ? `
@@ -4552,12 +4607,39 @@ async function saveEditProduct(id) {
   const stock_minimo = Number(document.getElementById("edit-minimo").value);
   const precio_venta = Number(document.getElementById("edit-precio").value);
   const costo_ultimo = Number(document.getElementById("edit-costo").value);
+  const val = (elId) => { const v = document.getElementById(elId)?.value?.trim(); return v === "" || v == null ? null : Number(v); };
+  const precio_mayorista = val("edit-precio-may");
+  const mayorista_min_cant = val("edit-may-min");
+  const proveedor_habitual_id = val("edit-prov-hab");
+  const vida_util_dias = val("edit-vida-util");
   const anterior = productos.find((p) => p.id === id);
-  const { error } = await sb.from("productos").update({ nombre, categoria_id, presentacion, es_insumo, favorito, usa_pajita, stock, stock_minimo, precio_venta, costo_ultimo }).eq("id", id);
+  const { error } = await sb.from("productos").update({ nombre, categoria_id, presentacion, es_insumo, favorito, usa_pajita, stock, stock_minimo, precio_venta, costo_ultimo, precio_mayorista, mayorista_min_cant, proveedor_habitual_id, vida_util_dias }).eq("id", id);
   if (error) { alert("No se pudo guardar."); console.error(error); return; }
   const cambioStock = anterior && anterior.stock !== stock ? ` (stock ${anterior.stock} → ${stock})` : "";
   await registrarHistorial("productos", id, "editar", `Editado: ${nombre}${cambioStock}`);
   closeModal();
+  await loadAll();
+}
+
+async function subirFotoProducto(id, file) {
+  if (!file) return;
+  const msg = document.getElementById("edit-foto-msg");
+  if (file.size > 5 * 1024 * 1024) { if (msg) msg.textContent = "La imagen es muy grande (máx 5 MB)."; return; }
+  if (msg) msg.textContent = "Subiendo...";
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+  const path = `producto-${id}-${Date.now()}.${ext}`;
+  const { error } = await sb.storage.from("fotos-productos").upload(path, file, { upsert: true, contentType: file.type });
+  if (error) {
+    console.error(error);
+    if (msg) msg.textContent = "No se pudo subir. Falta activar el almacenamiento de fotos (corré supabase/06_storage.sql).";
+    return;
+  }
+  const { data: pub } = sb.storage.from("fotos-productos").getPublicUrl(path);
+  const url = pub.publicUrl;
+  await sb.from("productos").update({ foto_url: url }).eq("id", id);
+  const img = document.getElementById("edit-foto-preview");
+  if (img) { img.src = url; img.classList.remove("hidden"); }
+  if (msg) msg.textContent = "Foto guardada ✓";
   await loadAll();
 }
 
@@ -4611,6 +4693,14 @@ function openNewProduct() {
           <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Stock mínimo</label>
           <input id="new-minimo" type="number" value="5" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
         </div>
+        <div>
+          <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Precio mayorista (opc.)</label>
+          <input id="new-precio-may" type="number" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+        </div>
+        <div>
+          <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Desde cuántas u.</label>
+          <input id="new-may-min" type="number" placeholder="Ej: 6" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+        </div>
       </div>
     </div>
     <button onclick="saveNewProduct()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3 mt-5">Crear producto</button>
@@ -4626,8 +4716,12 @@ async function saveNewProduct() {
   const costo_ultimo = Number(document.getElementById("new-costo").value) || 0;
   const stock = Number(document.getElementById("new-stock").value) || 0;
   const stock_minimo = Number(document.getElementById("new-minimo").value) || 0;
+  const pmay = document.getElementById("new-precio-may").value.trim();
+  const pmin = document.getElementById("new-may-min").value.trim();
+  const precio_mayorista = pmay === "" ? null : Number(pmay);
+  const mayorista_min_cant = pmin === "" ? null : Number(pmin);
 
-  const { data, error } = await sb.from("productos").insert({ nombre, categoria_id, presentacion, precio_venta, costo_ultimo, stock, stock_minimo }).select().single();
+  const { data, error } = await sb.from("productos").insert({ nombre, categoria_id, presentacion, precio_venta, costo_ultimo, stock, stock_minimo, precio_mayorista, mayorista_min_cant }).select().single();
   if (error) { alert("No se pudo crear el producto."); console.error(error); return; }
   await registrarHistorial("productos", data.id, "crear", `Producto creado: ${nombre}`);
   closeModal();
