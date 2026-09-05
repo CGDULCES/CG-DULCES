@@ -189,6 +189,7 @@ create table if not exists public.caja_movimientos (
   fecha        timestamptz not null default now()
 );
 alter table public.caja_movimientos add column if not exists compra_id bigint;
+alter table public.caja_movimientos add column if not exists cobro_id  bigint;   -- la app original lo usaba en algunos cobros
 create index if not exists idx_cajamov_caja on public.caja_movimientos(caja_id);
 create index if not exists idx_cajamov_venta on public.caja_movimientos(venta_id);
 create index if not exists idx_cajamov_compra on public.caja_movimientos(compra_id);

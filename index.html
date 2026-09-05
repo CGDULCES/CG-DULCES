@@ -666,10 +666,9 @@ function mostrarCapitalInicial() {
 async function crearCajaInicial() {
   const apertura_efectivo = Number(document.getElementById("capital-efectivo").value) || 0;
   const apertura_banco = Number(document.getElementById("capital-banco").value) || 0;
-  const registrado_por = usuarios[0]?.nombre || "";
-  const { data, error } = await sb.from("caja").insert({ apertura_efectivo, apertura_banco, registrado_por, estado: "abierta" }).select().single();
-  if (error) { alert("No se pudo iniciar la caja."); console.error(error); return; }
-  await registrarHistorial("caja", data.id, "crear", `Capital inicial del sistema — efectivo ${fmt(apertura_efectivo)}, banco ${fmt(apertura_banco)}`);
+  try {
+    await CG.rpc.abrirCaja(apertura_efectivo, apertura_banco, usuarios[0]?.nombre || "");
+  } catch (e) { alert(e.message); console.error(e); return; }
   closeModal();
   await loadAll();
 }
@@ -681,17 +680,10 @@ async function abrirCaja() {
   try {
     const { count } = await sb.from("caja").select("*", { count: "exact", head: true });
     if (count === 0) { mostrarCapitalInicial(); return; }
-
-    const registrado_por = usuarios[0]?.nombre || "";
-    // Repone automáticamente lo que quedó al cerrar la última caja
-    const { data: ultimaCerrada } = await sb.from("caja").select("*").eq("estado", "cerrada").order("fecha_cierre", { ascending: false }).limit(1);
-    const previa = ultimaCerrada && ultimaCerrada.length ? ultimaCerrada[0] : null;
-    const apertura_efectivo = previa ? Number(previa.cierre_efectivo || 0) : 0;
-    const apertura_banco = previa ? Number(previa.cierre_banco || 0) : 0;
-
-    const { data, error } = await sb.from("caja").insert({ apertura_efectivo, apertura_banco, registrado_por, estado: "abierta" }).select().single();
-    if (error) { alert("No se pudo abrir la caja."); console.error(error); return; }
-    await registrarHistorial("caja", data.id, "crear", `Caja abierta — efectivo ${fmt(apertura_efectivo)}, banco ${fmt(apertura_banco)}`);
+    // apertura null => la funcion repone automaticamente lo que quedo al cerrar la ultima caja
+    try {
+      await CG.rpc.abrirCaja(null, null, usuarios[0]?.nombre || "");
+    } catch (e) { alert(e.message); console.error(e); return; }
     await loadAll();
   } finally {
     procesandoAccion = false;
@@ -813,18 +805,9 @@ async function saveMovimientoCaja(tipo) {
   const medio_pago = document.getElementById("mov-caja-medio").value;
   const descripcion = document.getElementById("mov-caja-descripcion").value.trim();
 
-  if (tipo === "retiro") {
-    const saldos = saldosCajaActual();
-    const disponible = esMedioBanco(medio_pago) ? saldos.banco : saldos.efectivo;
-    if (monto > disponible) {
-      alert(`No hay suficiente en ${esMedioBanco(medio_pago) ? "la cuenta bancaria" : "efectivo"}. Disponible: ${fmt(disponible)}.`);
-      return;
-    }
-  }
-
-  const { error } = await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo, monto, medio_pago, descripcion });
-  if (error) { alert("No se pudo registrar."); console.error(error); return; }
-  await registrarHistorial("caja_movimientos", cajaActual.id, "crear", `${tipo === "retiro" ? "Retiro" : "Ingreso extra"} de ${fmt(monto)}${descripcion ? " — " + descripcion : ""}`);
+  try {
+    await CG.rpc.movimientoCaja({ tipo, monto, medio_pago, descripcion, registrado_por: usuarios[0]?.nombre || "" });
+  } catch (e) { alert(e.message); console.error(e); return; }
   closeModal();
   await loadAll();
 }
@@ -927,28 +910,15 @@ async function confirmarDividirCuenta() {
   procesandoAccion = true;
 
   try {
-  const total = producto.precio_venta * cantidad;
-  const registrado_por = usuarios[0]?.nombre || "";
-  const created_at = fechaOAhora(window.__divCuentaFecha);
-
-  // Un solo registro de venta (para el stock), a nombre del primer cliente elegido
-  const { data: venta, error } = await sb
-    .from("ventas")
-    .insert({ subtotal: total, descuento_total: 0, total, medio_pago: "fiado", registrado_por, cliente_id: null, es_fiado: true, created_at })
-    .select().single();
-  if (error) { alert("No se pudo registrar."); console.error(error); return; }
-
-  await sb.from("venta_items").insert({ venta_id: venta.id, producto_id: producto.id, cantidad, precio_unitario: producto.precio_venta, costo_unitario: producto.costo_ultimo, descuento: 0, subtotal: total });
-  await sb.from("productos").update({ stock: producto.stock - cantidad }).eq("id", producto.id);
-
-  // Repartir el monto entre todos los elegidos (ajustando centavos en el primero para que sume exacto)
-  const porPersona = Math.floor(total / seleccion.length);
-  const resto = total - porPersona * seleccion.length;
-  const filas = seleccion.map((clienteId, i) => ({ venta_id: venta.id, cliente_id: clienteId, monto: porPersona + (i === 0 ? resto : 0) }));
-  await sb.from("venta_repartos").insert(filas);
-
-  const nombres = seleccion.map((id) => clientes.find((c) => c.id === id)?.nombre).join(", ");
-  await registrarHistorial("ventas", venta.id, "crear", `Cuenta dividida: ${producto.nombre} (${fmt(total)}) entre ${nombres}`);
+  try {
+    await CG.rpc.dividirCuenta({
+      producto_id: producto.id,
+      cantidad,
+      registrado_por: usuarios[0]?.nombre || "",
+      created_at: fechaOAhora(window.__divCuentaFecha),
+      clientes: seleccion,
+    });
+  } catch (e) { alert(e.message); console.error(e); return; }
 
   closeModal();
   activeTab = "dashboard";
@@ -1924,15 +1894,13 @@ async function saveCobroVenta(ventaId) {
   const monto = Number(document.getElementById("cobroventa-monto").value) || 0;
   if (monto <= 0) return;
   const medio_pago = document.getElementById("cobroventa-medio").value;
-  const registrado_por = usuarios[0]?.nombre || "";
   const clienteId = window.__clienteDetalleId;
   const cliente = clientes.find((c) => c.id === clienteId);
   procesandoAccion = true;
   try {
-    const { data: cobro, error } = await sb.from("cobros").insert({ cliente_id: clienteId, venta_id: ventaId, monto, medio_pago, registrado_por }).select().single();
-    if (error) { alert("No se pudo registrar el cobro."); console.error(error); return; }
-    await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "cobro", monto, medio_pago, venta_id: ventaId, cobro_id: cobro.id, descripcion: `Cobro a ${cliente?.nombre || ""}` });
-    await registrarHistorial("cobros", ventaId, "crear", `Cobro de ${fmt(monto)} a ${cliente?.nombre || ""}`);
+    try {
+      await CG.rpc.registrarCobro({ cliente_id: clienteId, venta_id: ventaId, monto, medio_pago, registrado_por: usuarios[0]?.nombre || "", cliente_nombre: cliente?.nombre });
+    } catch (e) { alert(e.message); console.error(e); return; }
     closeModal();
     await loadAll();
     await abrirClienteDetalle(clienteId);
@@ -1963,22 +1931,16 @@ async function saveCobroSeleccionadas() {
   const registrado_por = usuarios[0]?.nombre || "";
   const clienteId = window.__clienteDetalleId;
   const cliente = clientes.find((c) => c.id === clienteId);
-  const filas = [...window.__clienteSeleccionadas].map((ventaId) => {
+  const cobros = [...window.__clienteSeleccionadas].map((ventaId) => {
     const v = window.__clienteDetalleVentas.find((vv) => vv.id === ventaId);
-    const pendiente = v.total - pagadoDeVenta(ventaId);
-    return { cliente_id: clienteId, venta_id: ventaId, monto: pendiente, medio_pago, registrado_por };
-  });
-  const totalCobrado = filas.reduce((s, f) => s + f.monto, 0);
+    return { venta_id: ventaId, monto: v.total - pagadoDeVenta(ventaId) };
+  }).filter((c) => c.monto > 0);
 
-  for (const fila of filas) {
-    const { error } = await sb.from("cobros").insert(fila);
-    if (error) { alert("No se pudo registrar uno de los cobros."); console.error(error); continue; }
-  }
-  // Un solo movimiento de caja por todo el lote, no uno por cada deuda
-  if (totalCobrado > 0) {
-    await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "cobro", monto: totalCobrado, medio_pago, descripcion: `Cobro a ${cliente?.nombre || ""} (${filas.length} deuda${filas.length>1?'s':''})` });
-  }
-  await registrarHistorial("cobros", clienteId, "crear", `Cobro de ${fmt(totalCobrado)} (${filas.length} ventas) a ${cliente?.nombre || ""}`);
+  try {
+    for (const c of cobros) {
+      await CG.rpc.registrarCobro({ cliente_id: clienteId, venta_id: c.venta_id, monto: c.monto, medio_pago, registrado_por, cliente_nombre: cliente?.nombre });
+    }
+  } catch (e) { alert(e.message); console.error(e); }
   closeModal();
   await loadAll();
   await abrirClienteDetalle(clienteId);
@@ -2085,9 +2047,10 @@ async function saveCobro(clienteId) {
   const monto = Number(document.getElementById("cobro-monto").value) || 0;
   if (monto <= 0) return;
   const medio_pago = document.getElementById("cobro-medio").value;
-  const registrado_por = usuarios[0]?.nombre || "";
-  const { error } = await sb.from("cobros").insert({ cliente_id: clienteId, monto, medio_pago, registrado_por });
-  if (error) { alert("No se pudo registrar el cobro."); console.error(error); return; }
+  const cliente = clientes.find((c) => c.id === clienteId);
+  try {
+    await CG.rpc.registrarCobro({ cliente_id: clienteId, venta_id: null, monto, medio_pago, registrado_por: usuarios[0]?.nombre || "", cliente_nombre: cliente?.nombre });
+  } catch (e) { alert(e.message); console.error(e); return; }
   closeModal();
   await loadAll();
   activeTab = "clientes";
@@ -2756,14 +2719,13 @@ async function saveNuevaPerdida() {
 
   procesandoAccion = true;
   try {
-    const registrado_por = usuarios[0]?.nombre || "";
-    for (const it of window.__perdidaItems) {
-      const p = productos.find((pr) => pr.id === it.producto_id);
-      if (!p) continue;
-      await sb.from("productos").update({ stock: p.stock - it.cantidad }).eq("id", p.id);
-      await sb.from("perdidas").insert({ producto_id: p.id, cantidad: it.cantidad, motivo, costo_unitario: p.costo_ultimo, registrado_por });
-      await registrarHistorial("productos", p.id, "editar", `Pérdida registrada: −${it.cantidad} ${p.nombre}${motivo ? " (" + motivo + ")" : ""}`);
-    }
+    try {
+      await CG.rpc.registrarPerdida({
+        motivo,
+        registrado_por: usuarios[0]?.nombre || "",
+        items: window.__perdidaItems.map((it) => ({ producto_id: it.producto_id, cantidad: it.cantidad })),
+      });
+    } catch (e) { alert(e.message); console.error(e); return; }
     window.__perdidaItems = [];
     closeModal();
     await loadAll();
@@ -3257,42 +3219,16 @@ async function saveNewCompra() {
 
   procesandoAccion = true;
   try {
-
-  const { data: compra, error } = await sb
-    .from("compras")
-    .insert({ proveedor_id, tipo, total, descuento, registrado_por, medio_pago, monto_efectivo, monto_transferencia, created_at })
-    .select().single();
-  if (error) { alert("No se pudo registrar la compra."); console.error(error); return; }
-
-  const items = window.__compraItems.map((it) => ({ compra_id: compra.id, producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario }));
-  const { error: itemsError } = await sb.from("compra_items").insert(items);
-  if (itemsError) {
-    alert("La compra se guardó, pero hubo un problema al guardar los productos. Abrí esta compra y volvé a cargarlos, o avisame para revisarlo.");
-    console.error(itemsError);
-    await registrarHistorial("compras", compra.id, "editar", `⚠ Se guardó la compra pero falló el guardado de productos — revisar`);
-    window.__compraItems = [];
-    closeModal();
-    await loadAll();
-    activeTab = "compras";
-    render();
-    return;
-  }
-
-  // Actualizar stock y costo_ultimo. Si el producto tiene equivalencia_bolas (ej: balde de helado),
-  // la cantidad comprada se convierte a la unidad en la que se controla el stock.
-  for (const it of window.__compraItems) {
-    const p = productos.find((pr) => pr.id === it.producto_id);
-    if (p) await sb.from("productos").update({ stock: p.stock + it.cantidad * factorConversion(p), costo_ultimo: it.costo_unitario }).eq("id", p.id);
-  }
-
-  // Descontar de la caja correspondiente
-  if (monto_efectivo > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "compra", monto: monto_efectivo, medio_pago: "efectivo", compra_id: compra.id, descripcion: `Compra #${compra.id}` });
-  if (monto_transferencia > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "compra", monto: monto_transferencia, medio_pago: "transferencia", compra_id: compra.id, descripcion: `Compra #${compra.id}` });
+  try {
+    await CG.rpc.registrarCompra({
+      proveedor_id, tipo, registrado_por,
+      descuento, total, medio_pago, monto_efectivo, monto_transferencia, created_at,
+      items: window.__compraItems.map((it) => ({ producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario })),
+    });
+  } catch (e) { alert(e.message); console.error(e); return; }
 
   window.__compraItems = [];
   closeModal();
-  const proveedorNombre = proveedores.find((p) => p.id === proveedor_id)?.nombre || "sin proveedor";
-  await registrarHistorial("compras", compra.id, "crear", `Compra registrada a ${proveedorNombre} por ${fmt(total)}`);
   await loadAll();
   activeTab = "compras";
   render();
@@ -4165,16 +4101,9 @@ async function registrarProduccion(id) {
 
   procesandoAccion = true;
   try {
-    for (const r of recetaDeEste) {
-      const insumo = productos.find((pr) => pr.id === r.insumo_id);
-      if (insumo) await sb.from("productos").update({ stock: insumo.stock - r.cantidad * cantidad }).eq("id", insumo.id);
-    }
-    await sb.from("productos").update({ stock: p.stock + cantidad }).eq("id", id);
-    const detalleReceta = recetaDeEste.map((r) => {
-      const insumo = productos.find((pr) => pr.id === r.insumo_id);
-      return `${insumo?.nombre || "?"} −${r.cantidad * cantidad}`;
-    }).join(", ");
-    await registrarHistorial("productos", id, "editar", `Producción registrada: +${cantidad} ${p.nombre}${detalleReceta ? ` (consumió: ${detalleReceta})` : " (sin receta cargada)"}`);
+    try {
+      await CG.rpc.registrarProduccion(id, cantidad, usuarios[0]?.nombre || "");
+    } catch (e) { alert(e.message); console.error(e); return; }
     closeModal();
     await loadAll();
   } finally {
