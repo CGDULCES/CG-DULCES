@@ -182,6 +182,7 @@
     CAJA_YA_ABIERTA: "Ya hay una caja abierta.",
     CAJA_NO_ABIERTA: "No hay ninguna caja abierta para cerrar.",
     MIN_2_CLIENTES: "Elegí al menos 2 clientes para dividir la cuenta.",
+    MONTOS_NO_COINCIDEN: "Los importes por cliente no coinciden con la cantidad de clientes elegidos.",
     MONTO_INVALIDO: "El monto no es válido.",
     CANTIDAD_INVALIDA: "La cantidad no es válida.",
     VENTA_INEXISTENTE: "Esa venta ya no existe.",

@@ -838,15 +838,26 @@ function openDividirCuenta() {
   window.__divCuentaProductoId = ventasVisibles()[0]?.id;
   window.__divCuentaCantidad = 1;
   window.__divCuentaFecha = fechaLocalHoy();
+  window.__divCuentaRedondeo = 0;
   renderDividirCuentaModal();
+}
+
+function divCuentaPartes() {
+  const productos_ = ventasVisibles();
+  const producto = productos_.find((p) => p.id === window.__divCuentaProductoId);
+  const totalReal = producto ? producto.precio_venta * window.__divCuentaCantidad : 0;
+  const n = window.__divCuentaSeleccion.size;
+  const red = window.__divCuentaRedondeo || 0;
+  const porPersonaReal = n > 0 ? totalReal / n : 0;
+  const porPersona = (red > 0 && n > 0) ? Math.ceil(porPersonaReal / red) * red : porPersonaReal;
+  const totalCobrar = (red > 0 && n > 0) ? porPersona * n : totalReal;
+  return { producto, totalReal, n, red, porPersona, totalCobrar };
 }
 
 function renderDividirCuentaModal() {
   const productos_ = ventasVisibles();
-  const producto = productos_.find((p) => p.id === window.__divCuentaProductoId);
-  const total = producto ? producto.precio_venta * window.__divCuentaCantidad : 0;
-  const cantidadSeleccionados = window.__divCuentaSeleccion.size;
-  const porPersona = cantidadSeleccionados > 0 ? total / cantidadSeleccionados : 0;
+  const { producto, totalReal, n: cantidadSeleccionados, red, porPersona, totalCobrar } = divCuentaPartes();
+  const total = totalReal;
 
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Dividir cuenta</p>
@@ -875,15 +886,27 @@ function renderDividirCuentaModal() {
       <button type="button" onclick="crearClienteDivCuenta()" class="bg-[#6B2D5C] text-white text-[13px] font-semibold px-3.5 rounded-xl">+</button>
     </div>
 
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Redondear la parte de cada uno</label>
+    <select id="div-redondeo" onchange="window.__divCuentaRedondeo = Number(this.value); renderDividirCuentaModal();" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none">
+      <option value="0" ${red===0?"selected":""}>Sin redondear (parte exacta)</option>
+      <option value="100" ${red===100?"selected":""}>A los 100 más cercanos (hacia arriba)</option>
+      <option value="500" ${red===500?"selected":""}>A los 500 más cercanos (hacia arriba)</option>
+      <option value="1000" ${red===1000?"selected":""}>A los 1.000 más cercanos (hacia arriba)</option>
+    </select>
+
     <div class="bg-[#F7F3FA] rounded-xl p-3 mb-5">
       <div class="flex items-center justify-between text-[13px] mb-1">
-        <span class="text-[#8a7d94]">Total</span>
+        <span class="text-[#8a7d94]">Precio real</span>
         <span class="font-mono-num font-semibold">${fmt(total)}</span>
       </div>
       <div class="flex items-center justify-between text-[13px]">
         <span class="text-[#8a7d94]">Entre ${cantidadSeleccionados} persona(s)</span>
         <span class="font-mono-num font-semibold text-[#6B2D5C]">${fmt(porPersona)} c/u</span>
       </div>
+      ${red > 0 ? `<div class="flex items-center justify-between text-[12px] mt-1 pt-1 border-t border-black/[0.06]">
+        <span class="text-[#8a7d94]">Total a cobrar (redondeado)</span>
+        <span class="font-mono-num font-semibold text-[#2F9E7A]">${fmt(totalCobrar)}${totalCobrar>total ? ` (+${fmt(totalCobrar-total)})` : ""}</span>
+      </div>` : ""}
     </div>
 
     <button onclick="confirmarDividirCuenta()" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Registrar y dividir</button>
@@ -927,6 +950,12 @@ async function confirmarDividirCuenta() {
   procesandoAccion = true;
 
   try {
+  const red = window.__divCuentaRedondeo || 0;
+  let montos = null;
+  if (red > 0) {
+    const porPersona = Math.ceil((producto.precio_venta * cantidad) / seleccion.length / red) * red;
+    montos = seleccion.map(() => porPersona);
+  }
   try {
     await CG.rpc.dividirCuenta({
       producto_id: producto.id,
@@ -934,6 +963,7 @@ async function confirmarDividirCuenta() {
       registrado_por: usuarios[0]?.nombre || "",
       created_at: fechaOAhora(window.__divCuentaFecha),
       clientes: seleccion,
+      ...(montos ? { montos } : {}),
     });
   } catch (e) { alert(e.message); console.error(e); return; }
 
@@ -1732,11 +1762,13 @@ function openCobroVenta(ventaId) {
   if (!cajaRequerida()) return;
   const v = window.__clienteDetalleVentas.find((vv) => vv.id === ventaId);
   const pendiente = v.total - pagadoDeVenta(ventaId);
+  window.__cobroVentaPendiente = pendiente;
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Cobrar esta venta</p>
     <p class="text-[12px] text-[#8a7d94] mb-4">Pendiente ${fmt(pendiente)}</p>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto que paga ahora</label>
-    <input id="cobroventa-monto" type="number" value="${pendiente}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none" />
+    <input id="cobroventa-monto" type="number" value="${pendiente}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-1 outline-none" />
+    <p class="text-[11px] text-[#8a7d94] mb-4">Si paga de más, la diferencia va a la caja como ingreso extra (redondeo).</p>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Forma de pago</label>
     <select id="cobroventa-medio" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none">
       <option value="efectivo">Efectivo</option>
@@ -1895,11 +1927,13 @@ async function saveEditReparto() {
 
 function openCobroReparto(ventaId, pendiente) {
   if (!cajaRequerida()) return;
+  window.__cobroVentaPendiente = pendiente;
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Cobrar su parte de la cuenta</p>
     <p class="text-[12px] text-[#8a7d94] mb-4">Pendiente ${fmt(pendiente)}</p>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto que paga ahora</label>
-    <input id="cobroventa-monto" type="number" value="${pendiente}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none" />
+    <input id="cobroventa-monto" type="number" value="${pendiente}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-1 outline-none" />
+    <p class="text-[11px] text-[#8a7d94] mb-4">Si paga de más, la diferencia va a la caja como ingreso extra (redondeo).</p>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Forma de pago</label>
     <select id="cobroventa-medio" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none">
       <option value="efectivo">Efectivo</option>
@@ -1920,7 +1954,7 @@ async function saveCobroVenta(ventaId) {
   procesandoAccion = true;
   try {
     try {
-      await CG.rpc.registrarCobro({ cliente_id: clienteId, venta_id: ventaId, monto, medio_pago, registrado_por: usuarios[0]?.nombre || "", cliente_nombre: cliente?.nombre });
+      await cobrarConSobrante({ cliente_id: clienteId, venta_id: ventaId, montoPagado: monto, pendiente: window.__cobroVentaPendiente, medio_pago, cliente_nombre: cliente?.nombre });
     } catch (e) { alert(e.message); console.error(e); return; }
     closeModal();
     await loadAll();
@@ -2058,19 +2092,46 @@ function openCobro(clienteId) {
 function actualizarSaldoCobro() {
   const monto = Number(document.getElementById("cobro-monto").value) || 0;
   const restante = Math.max(0, window.__cobroDeuda - monto);
-  document.getElementById("cobro-saldo-restante").textContent = `Después de este pago queda debiendo ${fmt(restante)}`;
+  const sobra = Math.max(0, monto - window.__cobroDeuda);
+  document.getElementById("cobro-saldo-restante").textContent = sobra > 0
+    ? `Salda la deuda y ${fmt(sobra)} van a la caja como ingreso extra (redondeo)`
+    : `Después de este pago queda debiendo ${fmt(restante)}`;
 }
 function setMontoCobro(monto) {
   document.getElementById("cobro-monto").value = monto;
   actualizarSaldoCobro();
 }
+// Registra un cobro y, si el cliente paga MÁS que lo que debe (redondeo:
+// debe 3.333, paga 3.500), salda la deuda exacta y carga la diferencia
+// (167) como "ingreso extra" en la caja, sin dejar saldos raros.
+async function cobrarConSobrante({ cliente_id, venta_id, montoPagado, pendiente, medio_pago, cliente_nombre }) {
+  const registrado_por = usuarios[0]?.nombre || "";
+  const cobroReal = (pendiente != null && montoPagado > pendiente) ? pendiente : montoPagado;
+  const sobrante = (pendiente != null) ? Math.max(0, montoPagado - pendiente) : 0;
+  if (cobroReal > 0) {
+    await CG.rpc.registrarCobro({ cliente_id, venta_id, monto: cobroReal, medio_pago, registrado_por, cliente_nombre });
+  }
+  if (sobrante > 0) {
+    try {
+      await CG.rpc.movimientoCaja({
+        tipo: "ingreso_extra", monto: sobrante, medio_pago, registrado_por,
+        descripcion: `Redondeo de cobro${venta_id ? " venta #" + venta_id : ""}${cliente_nombre ? " — " + cliente_nombre : ""}`,
+      });
+    } catch (e) {
+      console.error(e);
+      alert(`El cobro se registró, pero la diferencia de redondeo (${fmt(sobrante)}) no se pudo cargar a la caja: ${e.message}`);
+    }
+  }
+  return { cobroReal, sobrante };
+}
+
 async function saveCobro(clienteId) {
   const monto = Number(document.getElementById("cobro-monto").value) || 0;
   if (monto <= 0) return;
   const medio_pago = document.getElementById("cobro-medio").value;
   const cliente = clientes.find((c) => c.id === clienteId);
   try {
-    await CG.rpc.registrarCobro({ cliente_id: clienteId, venta_id: null, monto, medio_pago, registrado_por: usuarios[0]?.nombre || "", cliente_nombre: cliente?.nombre });
+    await cobrarConSobrante({ cliente_id: clienteId, venta_id: null, montoPagado: monto, pendiente: window.__cobroDeuda, medio_pago, cliente_nombre: cliente?.nombre });
   } catch (e) { alert(e.message); console.error(e); return; }
   closeModal();
   await loadAll();
@@ -3405,7 +3466,7 @@ function openNewCompra() {
   window.__compraDescuento = 0;
   window.__compraProveedorId = proveedores[0]?.id || null;
   const primerProducto = productos.find((p) => !p.es_insumo);
-  window.__compraItems = [{ producto_id: primerProducto?.id, cantidad: 1, costo_unitario: 0 }];
+  window.__compraItems = [{ producto_id: primerProducto?.id, cantidad: 1, costo_unitario: 0, total_linea: 0 }];
   renderCompraModal();
 }
 
@@ -3416,7 +3477,7 @@ function openEditCompra(id) {
   window.__compraTipo = c.tipo;
   window.__compraFecha = new Date(c.created_at).toISOString().slice(0, 10);
   window.__compraDescuento = Number(c.descuento) || 0;
-  window.__compraItems = (c.compra_items || []).map((it) => ({ id: it.id, producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario }));
+  window.__compraItems = (c.compra_items || []).map((it) => ({ id: it.id, producto_id: it.producto_id, cantidad: Number(it.cantidad), costo_unitario: Number(it.costo_unitario), total_linea: Number(it.cantidad) * Number(it.costo_unitario) }));
   window.__originalCompraItems = JSON.parse(JSON.stringify(window.__compraItems));
   window.__editingProveedorId = c.proveedor_id;
   window.__compraProveedorId = c.proveedor_id;
@@ -3445,9 +3506,9 @@ function renderCompraModal() {
   const editando = !!window.__editingCompraId;
   const medioPagoActual = window.__medioPagoCompra || "efectivo";
   const opcionesProveedor = proveedores.map((p) => `<option value="${p.id}" ${window.__compraProveedorId===p.id ? "selected":""}>${p.nombre}</option>`).join("");
-  const subtotalCompra = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+  const subtotalCompraVal = subtotalCompra();
   const descuentoCompra = window.__compraDescuento || 0;
-  const total = Math.max(0, subtotalCompra - descuentoCompra);
+  const total = Math.max(0, subtotalCompraVal - descuentoCompra);
   const productosDisponibles = productosPorTipoCompra();
 
   const filasHtml = window.__compraItems.map((it, i) => {
@@ -3466,12 +3527,16 @@ function renderCompraModal() {
         </div>
         <div>
           <label class="text-[10px] text-[#8a7d94]">Costo c/u</label>
-          <input type="number" value="${it.costo_unitario}" onchange="cambiarItemCompra(${i}, 'costo_unitario', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] outline-none" />
+          <input type="number" step="any" value="${Number.isInteger(it.costo_unitario) ? it.costo_unitario : Number(it.costo_unitario).toFixed(2)}" onchange="cambiarItemCompra(${i}, 'costo_unitario', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] outline-none" />
         </div>
+      </div>
+      <div class="mt-2">
+        <label class="text-[10px] text-[#8a7d94]">Total de la línea — lo que pagaste (ajusta el costo c/u)</label>
+        <input type="number" step="any" value="${it.total_linea || ""}" placeholder="Ej: pagaste 20000 por la caja" onchange="cambiarItemCompra(${i}, 'total_linea', this.value)" class="w-full bg-white rounded-lg px-2 py-2 text-[13px] outline-none" />
       </div>
       <div class="flex items-center justify-between mt-2 pt-2 border-t border-black/[0.06]">
         <span class="text-[11px] text-[#8a7d94]">Subtotal de este producto</span>
-        <span class="font-mono-num text-[13px] font-semibold text-[#241C2E]">${fmt(it.cantidad * it.costo_unitario)}</span>
+        <span class="font-mono-num text-[13px] font-semibold text-[#241C2E]">${fmt(totalLineaCompra(it))}</span>
       </div>
       ${factor > 1 ? `<p class="text-[10px] text-[#2F9E7A] mt-1.5">Suma ${it.cantidad * factor} al stock (${factor} por unidad)</p>` : ""}
       ${window.__compraItems.length > 1 ? `<button onclick="quitarItemCompra(${i})" class="text-[11px] text-[#D64545] mt-2">Quitar</button>` : ""}
@@ -3500,7 +3565,7 @@ function renderCompraModal() {
     <input id="compra-descuento" type="number" value="${descuentoCompra}" onchange="window.__compraDescuento = Number(this.value) || 0; renderCompraModal();" placeholder="Ej: te hicieron un descuento por compra grande" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none" />
 
     <div class="flex items-center justify-between mb-1 text-[12px] text-[#8a7d94]">
-      <span>Subtotal</span><span class="font-mono-num">${fmt(subtotalCompra)}</span>
+      <span>Subtotal</span><span class="font-mono-num">${fmt(subtotalCompraVal)}</span>
     </div>
     <div class="flex items-center justify-between mb-4">
       <span class="text-[12px] text-[#8a7d94]">Total</span>
@@ -3543,7 +3608,7 @@ function selectPagoCompra(medio, btn) {
 }
 
 function actualizarRestoMixtoCompra() {
-  const total = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+  const total = Math.max(0, subtotalCompra() - (window.__compraDescuento || 0));
   const efectivo = Number(document.getElementById("mixto-compra-efectivo").value) || 0;
   const transferencia = Number(document.getElementById("mixto-compra-transferencia").value) || 0;
   const resto = total - efectivo - transferencia;
@@ -3551,13 +3616,36 @@ function actualizarRestoMixtoCompra() {
     resto === 0 ? "✓ Cubre el total exacto" : resto > 0 ? `Falta cubrir ${fmt(resto)}` : `Te pasaste por ${fmt(-resto)}`;
 }
 
+// Total de una línea de compra: si la persona cargó "total de la línea"
+// (lo que realmente pagó), se usa eso; si no, cantidad × costo c/u.
+function totalLineaCompra(it) {
+  const t = Number(it.total_linea);
+  return Number.isFinite(t) && t > 0 ? t : (Number(it.cantidad) || 0) * (Number(it.costo_unitario) || 0);
+}
+function subtotalCompra() {
+  return window.__compraItems.reduce((s, it) => s + totalLineaCompra(it), 0);
+}
+
 function cambiarItemCompra(i, campo, valor) {
-  window.__compraItems[i][campo] = Number(valor);
+  const it = window.__compraItems[i];
+  if (campo === "producto_id") { it.producto_id = Number(valor); renderCompraModal(); return; }
+  const num = Number(valor) || 0;
+  if (campo === "cantidad") {
+    it.cantidad = num;
+    if (Number(it.total_linea) > 0) it.costo_unitario = it.cantidad > 0 ? Number(it.total_linea) / it.cantidad : 0;
+    else it.total_linea = it.cantidad * (Number(it.costo_unitario) || 0);
+  } else if (campo === "costo_unitario") {
+    it.costo_unitario = num;
+    it.total_linea = num * (Number(it.cantidad) || 0);
+  } else if (campo === "total_linea") {
+    it.total_linea = num;
+    it.costo_unitario = Number(it.cantidad) > 0 ? num / Number(it.cantidad) : 0;
+  }
   renderCompraModal();
 }
 function agregarItemCompra() {
   const disponibles = productosPorTipoCompra();
-  window.__compraItems.push({ producto_id: disponibles[0]?.id, cantidad: 1, costo_unitario: 0 });
+  window.__compraItems.push({ producto_id: disponibles[0]?.id, cantidad: 1, costo_unitario: 0, total_linea: 0 });
   renderCompraModal();
 }
 function quitarItemCompra(i) {
@@ -3606,7 +3694,7 @@ async function saveNewCompra() {
   const created_at = fechaOAhora(fecha);
   const registrado_por = usuarios[0]?.nombre || "";
   const descuento = window.__compraDescuento || 0;
-  const subtotal = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+  const subtotal = subtotalCompra();
   const total = Math.max(0, subtotal - descuento);
   const medio_pago = window.__medioPagoCompra || "efectivo";
 
@@ -3663,7 +3751,7 @@ async function saveEditCompra() {
   const fecha = document.getElementById("compra-fecha").value;
   const created_at = fechaOAhora(fecha);
   const descuento = window.__compraDescuento || 0;
-  const subtotal = window.__compraItems.reduce((s, it) => s + it.cantidad * it.costo_unitario, 0);
+  const subtotal = subtotalCompra();
   const total = Math.max(0, subtotal - descuento);
   const compraId = window.__editingCompraId;
 
