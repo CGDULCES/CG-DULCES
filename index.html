@@ -189,8 +189,19 @@ document.getElementById("logout-btn").addEventListener("click", async () => {
 });
 
 // ---------- Carga de datos ----------
+window.__config = {};
+async function loadConfiguracion() {
+  const { data, error } = await sb.from("configuracion").select("*");
+  if (error) { console.error(error); return; }
+  window.__config = Object.fromEntries((data || []).map((c) => [c.clave, c.valor]));
+}
+// Unidad para redondear los importes SOLO en los mensajes de WhatsApp (0 = no redondear)
+function redondeoMensajes() {
+  return Number(window.__config?.redondeo_mensajes || 0) || 0;
+}
+
 async function loadAll() {
-  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras(), loadClientes(), loadVentasClientes(), loadCobros(), loadCaja(), loadHistorial(), loadRepartosClientes(), loadRecetas()]);
+  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras(), loadClientes(), loadVentasClientes(), loadCobros(), loadCaja(), loadHistorial(), loadRepartosClientes(), loadRecetas(), loadConfiguracion()]);
   render();
 }
 
@@ -1753,7 +1764,7 @@ function recordarDeudaWhatsapp(clienteId) {
   const deuda = pendientes.reduce((s, x) => s + x.pendiente, 0);
   if (deuda <= 0) { alert("Este cliente no tiene deuda pendiente."); return; }
   pendientes.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-  const mensaje = CG.mensajeFiado({ negocio: "CG Dulces", cliente, deuda, ventas: pendientes });
+  const mensaje = CG.mensajeFiado({ negocio: "CG Dulces", cliente, deuda, ventas: pendientes, redondeo: redondeoMensajes() });
   CG.abrirWhatsApp(cliente.telefono || "", mensaje);
 }
 
@@ -2872,14 +2883,27 @@ async function deletePromocion(id) {
 // ---------- Configuración ----------
 async function renderConfiguracion(content) {
   const { data: config } = await sb.from("configuracion").select("*");
-  const nombreNegocio = config?.find((c) => c.clave === "nombre_negocio")?.valor || "CG Dulces";
+  const cfg = Object.fromEntries((config || []).map((c) => [c.clave, c.valor]));
+  const nombreNegocio = cfg.nombre_negocio || "CG Dulces";
+  const redMsg = Number(cfg.redondeo_mensajes || 0) || 0;
+  const opt = (v, t) => `<option value="${v}" ${redMsg === v ? "selected" : ""}>${t}</option>`;
   content.innerHTML = `
     <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
     ${sectionLabel("Configuración")}
 
     <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] mb-4">
       <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Nombre del negocio</label>
-      <input id="config-nombre" type="text" value="${nombreNegocio}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+      <input id="config-nombre" type="text" value="${nombreNegocio}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none" />
+
+      <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Redondear importes en los mensajes de WhatsApp</label>
+      <select id="config-redondeo-msg" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-1 outline-none">
+        ${opt(0, "Sin redondear (mostrar el monto exacto)")}
+        ${opt(100, "A los 100 más cercanos (hacia arriba)")}
+        ${opt(500, "A los 500 más cercanos (hacia arriba)")}
+        ${opt(1000, "A los 1.000 más cercanos (hacia arriba)")}
+      </select>
+      <p class="text-[11px] text-[#8a7d94] mb-3">Solo cambia lo que se ve en el comprobante y el recordatorio de deuda. La deuda y la venta en el sistema quedan con el monto real.</p>
+
       <button onclick="guardarConfiguracion()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Guardar</button>
     </div>
 
@@ -2971,9 +2995,13 @@ async function cambiarPassword() {
 
 async function guardarConfiguracion() {
   const valor = document.getElementById("config-nombre").value.trim();
-  if (!valor) return;
-  await sb.from("configuracion").upsert({ clave: "nombre_negocio", valor });
-  await registrarHistorial("configuracion", null, "editar", `Nombre del negocio cambiado a: ${valor}`);
+  const redondeo = document.getElementById("config-redondeo-msg")?.value ?? "0";
+  const filas = [{ clave: "redondeo_mensajes", valor: String(redondeo) }];
+  if (valor) filas.push({ clave: "nombre_negocio", valor });
+  const { error } = await sb.from("configuracion").upsert(filas);
+  if (error) { alert("No se pudo guardar."); console.error(error); return; }
+  await registrarHistorial("configuracion", null, "editar", `Configuración actualizada (redondeo mensajes: ${redondeo})`);
+  await loadConfiguracion();
   alert("Guardado.");
 }
 
@@ -4493,6 +4521,7 @@ function mostrarVentaConfirmada(datosVenta, lineasVenta, clienteObj) {
     venta: { ...datosVenta, cliente_nombre: clienteObj?.nombre },
     items: itemsRecibo,
     pagado: datosVenta.es_fiado ? 0 : datosVenta.total,
+    redondeo: redondeoMensajes(),
   });
   window.__ultimoComprobanteTel = clienteObj?.telefono || "";
 

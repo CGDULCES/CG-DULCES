@@ -111,25 +111,41 @@
     window.open(waLink(tel, mensaje), "_blank", "noopener");
   }
 
+  // Redondea hacia arriba a la unidad indicada (500 -> 3.333 pasa a 3.500).
+  // unidad <= 0 => sin redondear (solo quita decimales). SOLO para mostrar en mensajes.
+  function redondearArriba(n, unidad) {
+    const u = Number(unidad) || 0;
+    return u > 0 ? Math.ceil(Number(n) / u) * u : Math.round(Number(n));
+  }
+
   // ---- Textos de negocio --------------------------------------
-  function ticketVenta({ negocio = "CG Dulces", venta, items, pagado }) {
+  // `redondeo` (opcional): unidad para redondear los importes SOLO en el texto
+  // del mensaje. No cambia nada en el sistema.
+  function ticketVenta({ negocio = "CG Dulces", venta, items, pagado, redondeo = 0 }) {
+    const rr = (n) => redondearArriba(n, redondeo);
     const L = [];
     L.push(`*${negocio}*`);
     L.push(`Comprobante de venta #${venta.id}`);
     L.push(fechaHora(venta.created_at));
     if (venta.cliente_nombre) L.push(`Cliente: ${venta.cliente_nombre}`);
     L.push("--------------------------------");
+    let sumaItems = 0;
     for (const it of items) {
       const nom = it.nombre + (it.presentacion ? ` ${it.presentacion}` : "");
+      const sub = rr(it.subtotal);
+      sumaItems += sub;
       L.push(`${it.cantidad} x ${nom}`);
-      L.push(`     ${fmt(it.subtotal)}`);
+      L.push(`     ${fmt(sub)}`);
     }
     L.push("--------------------------------");
-    if (venta.descuento_total > 0) L.push(`Descuento: -${fmt(venta.descuento_total)}`);
-    L.push(`*TOTAL: ${fmt(venta.total)}*`);
+    const desc = venta.descuento_total > 0 ? rr(venta.descuento_total) : 0;
+    if (desc > 0) L.push(`Descuento: -${fmt(desc)}`);
+    // El total del mensaje = suma de lo que se muestra (asi siempre cierra).
+    const totalMsg = redondeo > 0 ? Math.max(0, sumaItems - desc) : Number(venta.total);
+    L.push(`*TOTAL: ${fmt(totalMsg)}*`);
     if (venta.es_fiado) {
-      const p = Number(pagado || 0);
-      L.push(`Fiado — pagado ${fmt(p)}, debe ${fmt(venta.total - p)}`);
+      const p = rr(pagado || 0);
+      L.push(`Fiado — pagado ${fmt(p)}, debe ${fmt(Math.max(0, totalMsg - p))}`);
     } else {
       L.push(`Pago: ${venta.medio_pago}`);
     }
@@ -138,15 +154,20 @@
     return L.join("\n");
   }
 
-  function mensajeFiado({ negocio = "CG Dulces", cliente, deuda, ventas = [] }) {
+  function mensajeFiado({ negocio = "CG Dulces", cliente, deuda, ventas = [], redondeo = 0 }) {
+    const rr = (n) => redondearArriba(n, redondeo);
+    const lineas = ventas.map((v) => ({ created_at: v.created_at, monto: rr(v.pendiente) }));
+    const deudaMsg = redondeo > 0 && lineas.length
+      ? lineas.reduce((s, x) => s + x.monto, 0)
+      : rr(deuda);
     const L = [];
     L.push(`Hola ${cliente.nombre}, ¿cómo estás? 🙂`);
     L.push(`Te escribo de *${negocio}*.`);
-    L.push(`Te paso que tenés un saldo pendiente de *${fmt(deuda)}*.`);
-    if (ventas.length) {
+    L.push(`Te paso que tenés un saldo pendiente de *${fmt(deudaMsg)}*.`);
+    if (lineas.length) {
       L.push("");
       L.push("Detalle:");
-      for (const v of ventas) L.push(`• ${fechaCorta(v.created_at)} — ${fmt(v.pendiente)}`);
+      for (const v of lineas) L.push(`• ${fechaCorta(v.created_at)} — ${fmt(v.monto)}`);
     }
     L.push("");
     L.push("Cualquier cosa me avisás. ¡Gracias! 🍬");
@@ -202,7 +223,7 @@
   }
 
   const CG = {
-    TZ, escapeHtml, el, fmt, fmtN, parseMoney,
+    TZ, escapeHtml, el, fmt, fmtN, parseMoney, redondearArriba,
     hoyLocal, fechaHora, fechaCorta,
     toCSV, descargarCSV, descargarJSON,
     telPY, waLink, abrirWhatsApp,
