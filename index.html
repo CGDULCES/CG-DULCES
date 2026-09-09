@@ -1292,11 +1292,13 @@ function renderClientes(content) {
 window.__clienteDetalleId = null;
 window.__clienteDetalleVentas = [];
 window.__clienteDetalleCobros = [];
-window.__clienteSeleccionadas = new Set();
+window.__clienteSeleccionadas = new Set();          // ids de ventas fiadas directas
+window.__clienteSeleccionadasRepartos = new Set();  // venta_id de cuentas compartidas
 
 async function abrirClienteDetalle(clienteId) {
   window.__clienteDetalleId = clienteId;
   window.__clienteSeleccionadas = new Set();
+  window.__clienteSeleccionadasRepartos = new Set();
   const [{ data: ventasCliente }, { data: cobrosCliente }, { data: repartosCliente }] = await Promise.all([
     sb.from("ventas").select("id, total, es_fiado, medio_pago, created_at, venta_items(cantidad, productos(nombre))").eq("cliente_id", clienteId).order("created_at", { ascending: false }),
     sb.from("cobros").select("*").eq("cliente_id", clienteId).order("created_at", { ascending: false }),
@@ -1621,9 +1623,10 @@ function renderClienteDetalle(content) {
 
     <div class="flex items-center justify-between mb-2">
       ${sectionLabel("Historial de compras")}
-      ${ventas.some((v) => v.es_fiado && Math.max(0, v.total - pagadoDeVenta(v.id)) > 0) ? `
+      ${(ventas.some((v) => v.es_fiado && Math.max(0, v.total - pagadoDeVenta(v.id)) > 0)
+         || repartos.some((r) => Math.max(0, r.monto - pagadoDeReparto(r.venta_id)) > 0)) ? `
       <button onclick="toggleSeleccionarTodasDeudas()" class="text-[11px] text-[#6B2D5C] font-semibold mb-2">
-        ${todasLasPendientesSeleccionadas(ventas) ? "Deseleccionar todas" : "Seleccionar todas las deudas"}
+        ${todasLasPendientesSeleccionadas() ? "Deseleccionar todas" : "Seleccionar todas las deudas"}
       </button>` : ""}
     </div>
     <div class="space-y-2 mb-4">
@@ -1673,6 +1676,9 @@ function renderClienteDetalle(content) {
         const itemsTexto = (r.ventas?.venta_items || []).map((it) => `${it.cantidad}× ${it.productos?.nombre || ""}`).join(", ");
         return `
         <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
+          <div class="flex items-start gap-2.5">
+            ${pendiente > 0 ? `<input type="checkbox" onchange="toggleSeleccionReparto(${r.venta_id}, this.checked)" ${window.__clienteSeleccionadasRepartos.has(r.venta_id) ? "checked" : ""} class="w-4 h-4 mt-0.5 shrink-0" />` : `<span class="w-4 shrink-0"></span>`}
+            <div class="flex-1 min-w-0">
           <div class="flex items-center justify-between gap-2">
             <span class="text-[11px] text-[#8a7d94]">${fechaHora}</span>
             <span class="font-mono-num text-[13px] font-semibold">${fmt(r.monto)}</span>
@@ -1690,26 +1696,42 @@ function renderClienteDetalle(content) {
               <button onclick="deleteRepartoCompartido(${r.venta_id})" class="text-[11px] text-[#D64545] font-semibold">Eliminar</button>
             </div>
           </div>
+            </div>
+          </div>
         </div>`;
       }).join("")}
     </div>` : ""}
   `;
 
-  if (window.__clienteSeleccionadas.size > 0) {
-    const totalSeleccion = [...window.__clienteSeleccionadas].reduce((s, id) => {
-      const v = ventas.find((vv) => vv.id === id);
-      return s + (v.total - pagadoDeVenta(id));
-    }, 0);
+  const nSel = window.__clienteSeleccionadas.size + window.__clienteSeleccionadasRepartos.size;
+  if (nSel > 0) {
+    const totalSeleccion = totalCobroSeleccionado();
     content.innerHTML += `
       <div class="bg-[#241C2E] rounded-2xl px-4 py-3 flex items-center justify-between sticky bottom-0">
         <div>
-          <p class="text-white/60 text-[11px]">${window.__clienteSeleccionadas.size} venta(s) elegidas</p>
+          <p class="text-white/60 text-[11px]">${nSel} deuda(s) elegida(s)</p>
           <p class="text-white font-mono-num text-[15px] font-semibold">${fmt(totalSeleccion)}</p>
         </div>
         <button onclick="openCobroSeleccionadas()" class="bg-[#2F9E7A] text-white text-[12px] font-semibold px-3.5 py-2.5 rounded-xl">Cobrar seleccionadas</button>
       </div>
     `;
   }
+}
+
+// Suma pendiente de todo lo seleccionado (ventas fiadas directas + partes de cuentas compartidas)
+function totalCobroSeleccionado() {
+  const ventas = window.__clienteDetalleVentas || [];
+  const repartos = window.__clienteDetalleRepartos || [];
+  let t = 0;
+  window.__clienteSeleccionadas.forEach((id) => {
+    const v = ventas.find((vv) => vv.id === id);
+    if (v) t += Math.max(0, v.total - pagadoDeVenta(id));
+  });
+  window.__clienteSeleccionadasRepartos.forEach((vid) => {
+    const r = repartos.find((rr) => rr.venta_id === vid);
+    if (r) t += Math.max(0, r.monto - pagadoDeReparto(vid));
+  });
+  return t;
 }
 
 // Arma un mensaje de recordatorio de deuda y lo abre en WhatsApp (al teléfono
@@ -1740,20 +1762,34 @@ function toggleSeleccionVenta(ventaId, checked) {
   else window.__clienteSeleccionadas.delete(ventaId);
   render();
 }
+function toggleSeleccionReparto(ventaId, checked) {
+  if (checked) window.__clienteSeleccionadasRepartos.add(ventaId);
+  else window.__clienteSeleccionadasRepartos.delete(ventaId);
+  render();
+}
 
 function ventasPendientesDe(ventas) {
   return ventas.filter((v) => v.es_fiado && Math.max(0, v.total - pagadoDeVenta(v.id)) > 0).map((v) => v.id);
 }
-function todasLasPendientesSeleccionadas(ventas) {
-  const pendientes = ventasPendientesDe(ventas);
-  return pendientes.length > 0 && pendientes.every((id) => window.__clienteSeleccionadas.has(id));
+function repartosPendientesDe(repartos) {
+  return repartos.filter((r) => Math.max(0, r.monto - pagadoDeReparto(r.venta_id)) > 0).map((r) => r.venta_id);
+}
+function todasLasPendientesSeleccionadas() {
+  const pv = ventasPendientesDe(window.__clienteDetalleVentas || []);
+  const pr = repartosPendientesDe(window.__clienteDetalleRepartos || []);
+  if (pv.length + pr.length === 0) return false;
+  return pv.every((id) => window.__clienteSeleccionadas.has(id))
+      && pr.every((id) => window.__clienteSeleccionadasRepartos.has(id));
 }
 function toggleSeleccionarTodasDeudas() {
-  const pendientes = ventasPendientesDe(window.__clienteDetalleVentas);
-  if (todasLasPendientesSeleccionadas(window.__clienteDetalleVentas)) {
-    pendientes.forEach((id) => window.__clienteSeleccionadas.delete(id));
+  const pv = ventasPendientesDe(window.__clienteDetalleVentas || []);
+  const pr = repartosPendientesDe(window.__clienteDetalleRepartos || []);
+  if (todasLasPendientesSeleccionadas()) {
+    pv.forEach((id) => window.__clienteSeleccionadas.delete(id));
+    pr.forEach((id) => window.__clienteSeleccionadasRepartos.delete(id));
   } else {
-    pendientes.forEach((id) => window.__clienteSeleccionadas.add(id));
+    pv.forEach((id) => window.__clienteSeleccionadas.add(id));
+    pr.forEach((id) => window.__clienteSeleccionadasRepartos.add(id));
   }
   render();
 }
@@ -1966,16 +2002,39 @@ async function saveCobroVenta(ventaId) {
 
 function openCobroSeleccionadas() {
   if (!cajaRequerida()) return;
+  const suma = totalCobroSeleccionado();
   showModal(`
-    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Cobrar ventas seleccionadas</p>
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Cobrar deudas seleccionadas</p>
+    <p class="text-[12px] text-[#8a7d94] mb-4">Total pendiente: ${fmt(suma)}</p>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Forma de pago</label>
-    <select id="cobrosel-medio" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none">
+    <select id="cobrosel-medio" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">
       <option value="efectivo">Efectivo</option>
       <option value="transferencia">Transferencia</option>
       <option value="qr">QR</option>
     </select>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Redondear el total a</label>
+    <select id="cobrosel-redondeo" onchange="pintarTotalCobroSel(${suma})" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-2 outline-none">
+      <option value="0">Sin redondear (${fmt(suma)})</option>
+      <option value="100">A los 100 (hacia arriba)</option>
+      <option value="500">A los 500 (hacia arriba)</option>
+      <option value="1000">A los 1.000 (hacia arriba)</option>
+    </select>
+    <p id="cobrosel-total" class="text-[12px] text-[#8a7d94] mb-5"></p>
     <button onclick="saveCobroSeleccionadas()" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Confirmar cobro</button>
   `);
+  pintarTotalCobroSel(suma);
+}
+
+function pintarTotalCobroSel(suma) {
+  const red = Number(document.getElementById("cobrosel-redondeo")?.value || 0);
+  const el = document.getElementById("cobrosel-total");
+  if (!el) return;
+  if (red <= 0) { el.textContent = ""; return; }
+  const objetivo = Math.ceil(suma / red) * red;
+  const sobra = objetivo - suma;
+  el.textContent = sobra > 0
+    ? `Cobra ${fmt(objetivo)} — salda las deudas y ${fmt(sobra)} van a la caja como ingreso extra (redondeo).`
+    : `Cobra ${fmt(objetivo)} (ya es redondo).`;
 }
 
 async function saveCobroSeleccionadas() {
@@ -1983,17 +2042,33 @@ async function saveCobroSeleccionadas() {
   procesandoAccion = true;
   try {
   const medio_pago = document.getElementById("cobrosel-medio").value;
+  const redondeo = Number(document.getElementById("cobrosel-redondeo")?.value || 0);
   const registrado_por = usuarios[0]?.nombre || "";
   const clienteId = window.__clienteDetalleId;
   const cliente = clientes.find((c) => c.id === clienteId);
-  const cobros = [...window.__clienteSeleccionadas].map((ventaId) => {
+
+  const cobros = [];
+  window.__clienteSeleccionadas.forEach((ventaId) => {
     const v = window.__clienteDetalleVentas.find((vv) => vv.id === ventaId);
-    return { venta_id: ventaId, monto: v.total - pagadoDeVenta(ventaId) };
-  }).filter((c) => c.monto > 0);
+    if (v) { const m = Math.max(0, v.total - pagadoDeVenta(ventaId)); if (m > 0) cobros.push({ venta_id: ventaId, monto: m }); }
+  });
+  window.__clienteSeleccionadasRepartos.forEach((ventaId) => {
+    const r = window.__clienteDetalleRepartos.find((rr) => rr.venta_id === ventaId);
+    if (r) { const m = Math.max(0, r.monto - pagadoDeReparto(ventaId)); if (m > 0) cobros.push({ venta_id: ventaId, monto: m }); }
+  });
+  if (cobros.length === 0) { closeModal(); return; }
+  const suma = cobros.reduce((s, c) => s + c.monto, 0);
+  const sobrante = redondeo > 0 ? Math.ceil(suma / redondeo) * redondeo - suma : 0;
 
   try {
     for (const c of cobros) {
       await CG.rpc.registrarCobro({ cliente_id: clienteId, venta_id: c.venta_id, monto: c.monto, medio_pago, registrado_por, cliente_nombre: cliente?.nombre });
+    }
+    if (sobrante > 0) {
+      await CG.rpc.movimientoCaja({
+        tipo: "ingreso_extra", monto: sobrante, medio_pago, registrado_por,
+        descripcion: `Redondeo de cobro (${cobros.length} deudas)${cliente?.nombre ? " — " + cliente.nombre : ""}`,
+      });
     }
   } catch (e) { alert(e.message); console.error(e); }
   closeModal();
