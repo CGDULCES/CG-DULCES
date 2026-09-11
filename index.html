@@ -95,9 +95,14 @@
         <svg class="tab-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
         <span>Dashboard</span>
       </button>
-      <button class="tab-btn flex flex-col items-center gap-1 py-2 px-3" data-tab="vender">
+      <button class="tab-btn flex flex-col items-center gap-1 py-2 px-3" data-tab="ventas">
         <span class="tab-pill"></span>
         <svg class="tab-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+        <span>Ventas</span>
+      </button>
+      <button class="tab-btn flex flex-col items-center gap-1 py-2 px-3" data-tab="caja">
+        <span class="tab-pill"></span>
+        <svg class="tab-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
         <span>Caja</span>
       </button>
       <button class="tab-btn flex flex-col items-center gap-1 py-2 px-3" data-tab="inventario">
@@ -480,14 +485,15 @@ function sectionLabel(text) {
 // ---------- Render principal ----------
 function render() {
   const content = document.getElementById("content");
-  const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes", "auditoria": "", "masopciones": "", "reportes": "", "promociones": "", "configuracion": "", "todas-ventas": "dashboard", "detallecaja": "", "perdidas": "", "categorias": "", "reposicion": "", "pedidos": "", "analisis": "" };
+  const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes", "auditoria": "", "masopciones": "", "reportes": "", "promociones": "", "configuracion": "", "todas-ventas": "dashboard", "perdidas": "", "categorias": "", "reposicion": "", "pedidos": "", "analisis": "" };
   const grupoActivo = mapaGrupo[activeTab] || activeTab;
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === grupoActivo));
   document.getElementById("add-product-fab").classList.toggle("screen-hidden", activeTab !== "inventario");
   document.getElementById("add-product-fab").classList.toggle("flex", activeTab === "inventario");
 
   if (activeTab === "dashboard") renderDashboard(content);
-  if (activeTab === "vender") renderVender(content);
+  if (activeTab === "ventas") renderVender(content);
+  if (activeTab === "caja") renderCaja(content);
   if (activeTab === "inventario") renderInventario(content);
   if (activeTab === "proveedores") renderProveedores(content);
   if (activeTab === "clientes") renderClientes(content);
@@ -500,7 +506,6 @@ function render() {
   if (activeTab === "promociones") renderPromociones(content);
   if (activeTab === "categorias") renderCategorias(content);
   if (activeTab === "configuracion") renderConfiguracion(content);
-  if (activeTab === "detallecaja") renderDetalleCaja(content);
   if (activeTab === "perdidas") renderPerdidas(content);
   if (activeTab === "reposicion") renderReposicion(content);
   if (activeTab === "pedidos") renderPedidos(content);
@@ -1044,7 +1049,7 @@ function renderTarjetaProducto(p, cat) {
 }
 
 function renderVender(content) {
-  let html = renderEstadoCaja();
+  let html = "";
   html += `
     <div class="relative mb-4">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8a7d94" stroke-width="2" stroke-linecap="round" class="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -2243,9 +2248,6 @@ function renderMasOpciones(content) {
       <button onclick="abrirReportes()" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
         <span class="text-[14px] font-semibold text-[#241C2E]">Reportes</span><span class="text-[#8a7d94]">›</span>
       </button>
-      <button onclick="irA('detallecaja')" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
-        <span class="text-[14px] font-semibold text-[#241C2E]">Detalle de caja (auditar saldo)</span><span class="text-[#8a7d94]">›</span>
-      </button>
       <button onclick="irAPerdidas()" class="w-full text-left bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04] flex items-center justify-between">
         <span class="text-[14px] font-semibold text-[#241C2E]">Pérdidas (roturas, vencidos)</span><span class="text-[#8a7d94]">›</span>
       </button>
@@ -3081,11 +3083,10 @@ async function deleteVentaDesdeTodas(ventaId) {
   await abrirTodasVentas();
 }
 
-// ---------- Detalle de caja (auditoría del saldo) ----------
-async function renderDetalleCaja(content) {
-  content.innerHTML = `
-    <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
-    ${sectionLabel("Detalle de caja · Historial completo")}
+// ---------- Caja (estado actual + todo el dinero y movimientos) ----------
+async function renderCaja(content) {
+  content.innerHTML = renderEstadoCaja() + `
+    ${sectionLabel("Movimientos de caja")}
     <p class="text-[13px] text-[#8a7d94]">Cargando todo el historial desde la primera caja...</p>
   `;
 
@@ -3094,9 +3095,8 @@ async function renderDetalleCaja(content) {
   const { data: todosLosMovs } = await sb.from("caja_movimientos").select("*").order("fecha", { ascending: true });
 
   if (!todasLasCajas || todasLasCajas.length === 0) {
-    content.innerHTML = `
-      <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
-      ${sectionLabel("Detalle de caja")}
+    content.innerHTML = renderEstadoCaja() + `
+      ${sectionLabel("Movimientos de caja")}
       <p class="text-[13px] text-[#8a7d94]">Todavía no se abrió ninguna caja.</p>
     `;
     return;
@@ -3168,17 +3168,14 @@ async function renderDetalleCaja(content) {
       </div>`;
   }).join("");
 
-  content.innerHTML = `
-    <button onclick="irA('masopciones')" class="text-[12px] text-[#6B2D5C] font-medium mb-3">‹ Volver</button>
-    ${sectionLabel("Detalle de caja · Historial completo")}
-
+  content.innerHTML = renderEstadoCaja() + `
     <div class="grid grid-cols-2 gap-3 mb-3">
       <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
-        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Efectivo hoy (calculado)</p>
+        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Efectivo (según todo el historial)</p>
         <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(efectivoFinal)}</p>
       </div>
       <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
-        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Banco hoy (calculado)</p>
+        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Banco (según todo el historial)</p>
         <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(bancoFinal)}</p>
       </div>
     </div>
@@ -3195,7 +3192,7 @@ async function renderDetalleCaja(content) {
       <p class="text-[11px] text-[#8a7d94]">Suman ${fmt(huerfanosTotal.reduce((s,f)=>s+Number(f.monto),0))} restados del saldo total. Es probable que sean de compras eliminadas antes de la corrección. Están marcados con ⚠ en la lista de abajo.</p>
     </div>` : ""}
 
-    ${sectionLabel(`Todo el historial (${todasLasCajas.length} caja${todasLasCajas.length>1?'s':''} en total)`)}
+    ${sectionLabel(`Movimientos de caja (${todasLasCajas.length} caja${todasLasCajas.length>1?'s':''} en total)`)}
     <div class="space-y-2">${filasHtml}</div>
   `;
 }
@@ -4011,7 +4008,7 @@ function renderCartBar() {
   const bar = document.getElementById("cart-bar");
   const items = Object.entries(cart).filter(([, q]) => q > 0);
   const hayHelados = heladoCart.length > 0;
-  if (activeTab !== "vender" || (items.length === 0 && !hayHelados)) { bar.classList.add("screen-hidden"); return; }
+  if (activeTab !== "ventas" || (items.length === 0 && !hayHelados)) { bar.classList.add("screen-hidden"); return; }
   const totalNormal = calcularCarritoPromos().total;
   const totalHelados = heladoCart.reduce((s, h) => s + h.total, 0);
   const total = totalNormal + totalHelados;

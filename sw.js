@@ -3,14 +3,19 @@
  * ---------------------------------------------------------------------
  * - Deja la app instalable y que ABRA sin internet (el "cascarón").
  * - HTML: network-first (siempre trae la última versión si hay señal).
- * - Estáticos propios (css/js/assets): cache-first.
+ * - .js / .css / manifest propios: network-first (si hay internet, SIEMPRE
+ *   se usa la versión nueva; offline cae al cache). Así una actualización
+ *   de código nunca queda "pegada" en un celular aunque no se toque este
+ *   archivo sw.js.
+ * - Imágenes/íconos propios: cache-first (no cambian casi nunca, ahorra datos).
  * - Librerías de CDN y fuentes: stale-while-revalidate.
  * - Las llamadas a Supabase NUNCA se cachean (siempre datos frescos).
  *
- * ⚠ Al publicar cambios, subí el número de CACHE_VERSION para que los
- *   dispositivos descarten el cache viejo.
+ * Igual, si cambiás algo de este mismo archivo (sw.js), el navegador lo
+ * detecta solo y actualiza. Si alguna vez hace falta forzar un refresco
+ * total en todos los celulares, subí CACHE_VERSION.
  * ===================================================================== */
-const CACHE_VERSION = "cg-v1";
+const CACHE_VERSION = "cg-v2";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 
@@ -72,7 +77,22 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Mismo origen -> cache-first
+  // Mismo origen, código (.js/.css/manifest) -> network-first: si hay
+  // internet, siempre la version mas nueva; sin internet, cae al cache.
+  if (url.origin === self.location.origin && /\.(js|css)$|manifest\.webmanifest$/.test(url.pathname)) {
+    event.respondWith(
+      fetch(request)
+        .then((resp) => {
+          const copy = resp.clone();
+          caches.open(STATIC_CACHE).then((c) => c.put(request, copy));
+          return resp;
+        })
+        .catch(() => caches.match(request))
+    );
+    return;
+  }
+
+  // Mismo origen, el resto (imágenes/íconos) -> cache-first
   if (url.origin === self.location.origin) {
     event.respondWith(
       caches.match(request).then((cached) =>
