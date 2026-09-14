@@ -46,6 +46,8 @@
     registrarCobro: (payload) => call("registrar_cobro", { p: payload }),
     anularCobro: (cobroId, motivo, usuario) =>
       call("anular_cobro", { p_cobro_id: cobroId, p_motivo: motivo || "", p_usuario: usuario || "" }),
+    editarCobro: (cobroId, monto, medioPago, usuario) =>
+      call("editar_cobro", { p_cobro_id: cobroId, p_monto: monto, p_medio_pago: medioPago, p_usuario: usuario || "" }),
     dividirCuenta: (payload) => call("dividir_cuenta", { p: payload }),
 
     // Compras / stock

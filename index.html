@@ -1338,41 +1338,17 @@ async function deleteVentaSinConfirmar(ventaId) {
   if (procesandoAccion) return;
   procesandoAccion = true;
   try {
+    let huboHelado = false;
+    try {
+      huboHelado = await CG.rpc.anularVenta(ventaId, "carga duplicada u error", usuarios[0]?.nombre || "");
+    } catch (e) { alert(e.message); console.error(e); return; }
 
-  // Traer los ítems reales de la venta (por si el listado en pantalla no los tiene completos)
-  const { data: items } = await sb.from("venta_items").select("producto_id, cantidad, productos(nombre)").eq("venta_id", ventaId);
+    if (huboHelado) {
+      alert("Listo. Ojo: esta venta tenía Helados armados — el dinero y la deuda ya se revirtieron, pero el consumo de bolas/insumos de Helado no se deshace solo. Si hace falta, ajustalo a mano en Inventario.");
+    }
 
-  // Revertir cobros hechos a esta venta (y sus movimientos de caja)
-  const { data: cobrosVenta } = await sb.from("cobros").select("id").eq("venta_id", ventaId);
-  const cobroIds = (cobrosVenta || []).map((c) => c.id);
-  if (cobroIds.length > 0) {
-    await sb.from("caja_movimientos").delete().in("cobro_id", cobroIds);
-    await sb.from("cobros").delete().in("id", cobroIds);
-  }
-
-  // Revertir el movimiento de caja de la venta original (si no fue fiada)
-  await sb.from("caja_movimientos").delete().eq("venta_id", ventaId);
-
-  // Revertir reparto de cuenta compartida, si la tenía
-  await sb.from("venta_repartos").delete().eq("venta_id", ventaId);
-
-  // Restaurar stock de productos normales (los de Helado armado no se revierten automáticamente)
-  let huboHelado = false;
-  for (const it of items || []) {
-    if (PRODUCTOS_HELADO_SIN_STOCK_DIRECTO.includes(it.productos?.nombre)) { huboHelado = true; continue; }
-    const p = productos.find((pr) => pr.id === it.producto_id);
-    if (p) await sb.from("productos").update({ stock: p.stock + it.cantidad }).eq("id", p.id);
-  }
-
-  await sb.from("ventas").delete().eq("id", ventaId);
-  await registrarHistorial("ventas", ventaId, "eliminar", `Venta eliminada (carga duplicada u error)`);
-
-  if (huboHelado) {
-    alert("Listo. Ojo: esta venta tenía Helados armados — el dinero y la deuda ya se revirtieron, pero el consumo de bolas/insumos de Helado no se deshace solo. Si hace falta, ajustalo a mano en Inventario.");
-  }
-
-  await loadAll();
-  if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
+    await loadAll();
+    if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
   } finally {
     procesandoAccion = false;
   }
@@ -1601,13 +1577,17 @@ function openEditCobroIndividual(cobroId) {
 async function saveEditCobroIndividual(cobroId) {
   const monto = Number(document.getElementById("editcobro-monto").value) || 0;
   const medio_pago = document.getElementById("editcobro-medio").value;
-  await sb.from("cobros").update({ monto, medio_pago }).eq("id", cobroId);
-  // Esto es lo que hace que el dinero se mueva solo entre efectivo y banco en la caja:
-  await sb.from("caja_movimientos").update({ monto, medio_pago }).eq("cobro_id", cobroId);
-  await registrarHistorial("cobros", cobroId, "editar", `Pago corregido a ${fmt(monto)} (${medio_pago})`);
+  if (monto <= 0) { alert("Poné un monto válido."); return; }
+  let ajustadoEnCaja = true;
+  try {
+    ajustadoEnCaja = await CG.rpc.editarCobro(cobroId, monto, medio_pago, usuarios[0]?.nombre || "");
+  } catch (e) { alert(e.message); console.error(e); return; }
   closeModal();
   await loadAll();
   if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
+  if (!ajustadoEnCaja) {
+    alert("El pago se corrigió, pero no encontré el movimiento de caja de ese pago para ajustarlo solo (puede pasar con pagos viejos). Revisá el saldo de caja y, si hace falta, ajustalo a mano.");
+  }
 }
 
 // Anula (borra) un pago ya registrado: la venta/parte que cubría vuelve a
@@ -2182,6 +2162,7 @@ async function saveNewCliente() {
 }
 
 function openCobro(clienteId) {
+  if (!cajaRequerida()) return;
   const c = clientes.find((cc) => cc.id === clienteId);
   const deuda = deudaCliente(clienteId);
   window.__cobroDeuda = deuda;
