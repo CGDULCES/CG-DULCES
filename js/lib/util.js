@@ -207,6 +207,7 @@
     MONTO_INVALIDO: "El monto no es válido.",
     CANTIDAD_INVALIDA: "La cantidad no es válida.",
     VENTA_INEXISTENTE: "Esa venta ya no existe.",
+    COBRO_INEXISTENTE: "Ese pago ya no existe (puede que ya lo hayan anulado).",
     PRODUCTO_INEXISTENTE: "Uno de los productos ya no existe.",
   };
   function errorRPC(error) {

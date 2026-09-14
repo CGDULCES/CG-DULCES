@@ -11,7 +11,8 @@
 --   5. Despues corre  VERIFICAR.sql  y manda el resultado a Claude.
 --
 -- Storage (fotos, comprobantes, backups) va aparte en 06_storage.sql.
--- Ajustes posteriores (redondeo en cuentas divididas) en 07_ajustes.sql.
+-- Ajustes posteriores (redondeo cuentas divididas, anular cobro) en
+-- 07_ajustes.sql y 08_ajustes.sql.
 -- Es seguro re-ejecutar este archivo: usa "if not exists" / "create or replace"
 -- y chequeos antes de crear constraints. No borra ni cambia datos existentes.
 -- =====================================================================
@@ -909,14 +910,54 @@ begin
 
   v_caja := public.caja_abierta_id();
   if v_caja is not null then
-    insert into public.caja_movimientos (caja_id, tipo, monto, medio_pago, venta_id, fecha, descripcion)
-    values (v_caja, 'cobro', v_monto, v_medio, (p->>'venta_id')::bigint, v_created,
+    insert into public.caja_movimientos (caja_id, tipo, monto, medio_pago, venta_id, cobro_id, fecha, descripcion)
+    values (v_caja, 'cobro', v_monto, v_medio, (p->>'venta_id')::bigint, v_id, v_created,
             'Cobro de fiado'||coalesce(' venta #'||(p->>'venta_id'), ''));
   end if;
 
   perform public._hist('cobros', v_id, 'crear',
     'Cobro de '||v_monto||coalesce(' a '||(p->>'cliente_nombre'), ''), p->>'registrado_por');
   return v_id;
+end $$;
+
+-- Anula (borra) un cobro ya registrado y revierte su movimiento de caja,
+-- para volver la deuda a "pendiente". Devuelve true si encontró y revirtió
+-- el movimiento de caja correspondiente, false si no lo encontró (cobros
+-- viejos, de antes de que cada cobro guardara su propio cobro_id) — en ese
+-- caso el pago igual se borra, pero conviene revisar el saldo de caja a mano.
+create or replace function public.anular_cobro(p_cobro_id bigint, p_motivo text default '', p_usuario text default '')
+returns boolean
+language plpgsql security definer set search_path = public as $$
+declare v_cobro record; v_mov_id bigint;
+begin
+  select * into v_cobro from public.cobros where id = p_cobro_id for update;
+  if not found then raise exception 'COBRO_INEXISTENTE' using errcode='P0001'; end if;
+
+  select id into v_mov_id from public.caja_movimientos where cobro_id = p_cobro_id limit 1;
+
+  if v_mov_id is null then
+    -- Compatibilidad con cobros hechos antes de guardar cobro_id: mejor
+    -- candidato = mismo tipo, mismo monto, misma venta (o ambos sin venta),
+    -- la fecha más cercana a la del cobro.
+    select id into v_mov_id from public.caja_movimientos
+    where tipo = 'cobro' and monto = v_cobro.monto
+      and coalesce(venta_id, -1) = coalesce(v_cobro.venta_id, -1)
+    order by abs(extract(epoch from (fecha - v_cobro.created_at)))
+    limit 1;
+  end if;
+
+  if v_mov_id is not null then
+    delete from public.caja_movimientos where id = v_mov_id;
+  end if;
+
+  delete from public.cobros where id = p_cobro_id;
+
+  perform public._hist('cobros', p_cobro_id, 'eliminar',
+    'Pago anulado ('||v_cobro.monto||')'||coalesce(' — '||nullif(p_motivo,''),'')||
+    case when v_mov_id is null then ' [no se encontró el movimiento de caja para revertir, revisar saldo]' else '' end,
+    p_usuario);
+
+  return v_mov_id is not null;
 end $$;
 
 -- ---------------------------------------------------------------------
@@ -1135,6 +1176,7 @@ begin
     'saldos_caja(bigint)','caja_abierta_id()','abrir_caja(numeric,numeric,text)',
     'cerrar_caja(bigint,numeric,numeric,text)','registrar_movimiento_caja(jsonb)',
     'registrar_venta(jsonb)','anular_venta(bigint,text,text)','registrar_cobro(jsonb)',
+    'anular_cobro(bigint,text,text)',
     'registrar_compra(jsonb)','registrar_produccion(bigint,numeric,text)',
     'registrar_perdida(jsonb)','dividir_cuenta(jsonb)'
   ]

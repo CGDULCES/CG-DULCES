@@ -44,6 +44,8 @@
     anularVenta: (ventaId, motivo, usuario) =>
       call("anular_venta", { p_venta_id: ventaId, p_motivo: motivo || "", p_usuario: usuario || "" }),
     registrarCobro: (payload) => call("registrar_cobro", { p: payload }),
+    anularCobro: (cobroId, motivo, usuario) =>
+      call("anular_cobro", { p_cobro_id: cobroId, p_motivo: motivo || "", p_usuario: usuario || "" }),
     dividirCuenta: (payload) => call("dividir_cuenta", { p: payload }),
 
     // Compras / stock

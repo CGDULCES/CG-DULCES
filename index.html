@@ -1573,7 +1573,10 @@ function renderPagosDeVentaModal() {
             <p class="text-[13px] font-semibold text-[#241C2E]">${fmt(p.monto)} · ${p.medio_pago === "transferencia" ? "Transferencia" : p.medio_pago === "qr" ? "QR" : "Efectivo"}</p>
             <p class="text-[11px] text-[#8a7d94]">${new Date(p.created_at).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}</p>
           </div>
-          <button onclick="openEditCobroIndividual(${p.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar</button>
+          <div class="flex items-center gap-3 shrink-0">
+            <button onclick="openEditCobroIndividual(${p.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar</button>
+            <button onclick="anularPagoIndividual(${p.id})" class="text-[11px] text-[#D64545] font-semibold">Anular</button>
+          </div>
         </div>`).join("")}
     </div>
   `);
@@ -1605,6 +1608,28 @@ async function saveEditCobroIndividual(cobroId) {
   closeModal();
   await loadAll();
   if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
+}
+
+// Anula (borra) un pago ya registrado: la venta/parte que cubría vuelve a
+// quedar pendiente, y se revierte el dinero de la caja.
+async function anularPagoIndividual(cobroId) {
+  if (procesandoAccion) return;
+  if (!confirm("¿Anular este pago? La venta vuelve a quedar pendiente de cobro y se revierte de la caja.")) return;
+  procesandoAccion = true;
+  try {
+    let revertidoEnCaja = true;
+    try {
+      revertidoEnCaja = await CG.rpc.anularCobro(cobroId, "anulado desde la app", usuarios[0]?.nombre || "");
+    } catch (e) { alert(e.message); console.error(e); return; }
+    closeModal();
+    await loadAll();
+    if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
+    if (!revertidoEnCaja) {
+      alert("El pago se anuló y la deuda volvió a quedar pendiente, pero no encontré el movimiento de caja de ese pago para revertirlo solo (puede pasar con pagos viejos). Revisá el saldo de caja y, si hace falta, ajustalo a mano con un retiro.");
+    }
+  } finally {
+    procesandoAccion = false;
+  }
 }
 
 function renderClienteDetalle(content) {
