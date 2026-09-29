@@ -4662,7 +4662,7 @@ async function openEditProduct(id) {
         <button onclick="cargarHielo()" class="bg-[#6B2D5C] text-white text-[12px] font-semibold px-3 py-2 rounded-lg">Cargar</button>
       </div>
     </div>` : ""}
-    ${p.es_fabricado && !esConsumibleIlimitado && p.nombre !== "Hielo · Bolsa" && !["Helado · Bola", "Helado · Pote 1/4"].includes(p.nombre) ? `
+    ${!p.es_insumo && !esConsumibleIlimitado && p.nombre !== "Hielo · Bolsa" && !["Helado · Bola", "Helado · Pote 1/4"].includes(p.nombre) ? `
     <div class="bg-[#F7F3FA] rounded-xl p-3 mt-3">
       <p class="text-[12px] font-semibold text-[#241C2E] mb-2">Receta (por cada 1 unidad producida)</p>
       <div id="receta-lista-${p.id}">${renderRecetaLista(p.id)}</div>
@@ -4869,6 +4869,10 @@ function openNewProduct() {
         <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Presentación (opcional)</label>
         <input id="new-presentacion" type="text" placeholder="Ej: 1.5 litros" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
       </div>
+      <label class="flex items-center gap-2">
+        <input type="checkbox" id="new-es-insumo" class="w-4 h-4" />
+        <span class="text-[13px] text-[#241C2E]">Es un insumo (no se vende directo)</span>
+      </label>
       <div class="grid grid-cols-2 gap-3">
         <div>
           <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Precio venta</label>
@@ -4915,8 +4919,9 @@ async function saveNewProduct() {
   const pmin = document.getElementById("new-may-min").value.trim();
   const precio_mayorista = pmay === "" ? null : Number(pmay);
   const mayorista_min_cant = pmin === "" ? null : Number(pmin);
+  const es_insumo = document.getElementById("new-es-insumo").checked;
 
-  const { data, error } = await sb.from("productos").insert({ nombre, categoria_id, presentacion, precio_venta, costo_ultimo, stock, stock_minimo, precio_mayorista, mayorista_min_cant }).select().single();
+  const { data, error } = await sb.from("productos").insert({ nombre, categoria_id, presentacion, es_insumo, precio_venta, costo_ultimo, stock, stock_minimo, precio_mayorista, mayorista_min_cant }).select().single();
   if (error) { alert("No se pudo crear el producto."); console.error(error); return; }
   await registrarHistorial("productos", data.id, "crear", `Producto creado: ${nombre}`);
   closeModal();
