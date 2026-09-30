@@ -1,25 +1,7 @@
 -- =====================================================================
--- CG DULCES · APLICAR TODO DE UNA VEZ  (seguridad + transacciones + analisis)
+-- CG DULCES · Script completo (para un proyecto Supabase nuevo o resync)
+-- Generado concatenando 01_schema.sql .. 05_views.sql en orden.
 -- =====================================================================
--- Junta EN ORDEN:  01_schema -> 02_security -> 03_rpc -> 04_triggers -> 05_views
---
--- COMO USARLO (una sola vez, en un proyecto nuevo):
---   1. supabase.com  ->  tu proyecto  ->  menu izquierdo "SQL Editor"
---   2. Boton  "+ New query"
---   3. Pega TODO este archivo
---   4. Boton  "Run"  (arriba a la derecha).  Debe decir  "Success".
---   5. Despues corre  VERIFICAR.sql  y manda el resultado a Claude.
---
--- Storage (fotos, comprobantes, backups) va aparte en 06_storage.sql.
--- Ajustes posteriores en 07_ajustes.sql, 08_ajustes.sql, 09_ajustes.sql.
--- Es seguro re-ejecutar este archivo: usa "if not exists" / "create or replace"
--- y chequeos antes de crear constraints. No borra ni cambia datos existentes.
--- =====================================================================
-
-
--- #####################################################################
--- ###  01_schema.sql
--- #####################################################################
 
 -- =====================================================================
 -- CG DULCES · Esquema de base de datos (Supabase / PostgreSQL)
@@ -415,11 +397,6 @@ create table if not exists public.backups_log (
 
 commit;
 
-
--- #####################################################################
--- ###  02_security.sql
--- #####################################################################
-
 -- =====================================================================
 -- CG DULCES · Seguridad (Row Level Security + permisos)
 -- =====================================================================
@@ -563,11 +540,6 @@ commit;
 --
 -- (Repetir el patrón para compras, productos.precio_*, usuarios_app, etc.)
 -- =====================================================================
-
-
--- #####################################################################
--- ###  03_rpc.sql
--- #####################################################################
 
 -- =====================================================================
 -- CG DULCES · Funciones transaccionales (RPC)
@@ -1247,11 +1219,6 @@ revoke all on function public._consumir_ilimitado(bigint,numeric)  from public, 
 
 commit;
 
-
--- #####################################################################
--- ###  04_triggers.sql
--- #####################################################################
-
 -- =====================================================================
 -- CG DULCES · Triggers
 -- =====================================================================
@@ -1296,12 +1263,72 @@ create trigger trg_compra_item_ai
 
 revoke all on function public._compra_item_after_insert() from public, anon, authenticated;
 
+-- ---------------------------------------------------------------------
+-- Costo automático de productos con receta: suma el costo de los
+-- insumos cada vez que cambia la receta, o el costo de un insumo usado
+-- en alguna receta. Ver 10_ajustes.sql para el detalle de por qué.
+-- ---------------------------------------------------------------------
+
+create or replace function public._recalcular_costo_producto(p_producto_id bigint)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare v_costo numeric;
+begin
+  select coalesce(sum(r.cantidad * i.costo_ultimo), 0)
+    into v_costo
+  from public.recetas r
+  join public.productos i on i.id = r.insumo_id
+  where r.producto_terminado_id = p_producto_id;
+
+  if exists (select 1 from public.recetas where producto_terminado_id = p_producto_id) then
+    update public.productos set costo_ultimo = v_costo where id = p_producto_id;
+  end if;
+end $$;
+
+create or replace function public._trg_recetas_recalc()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if TG_OP = 'DELETE' then
+    perform public._recalcular_costo_producto(old.producto_terminado_id);
+    return old;
+  else
+    perform public._recalcular_costo_producto(new.producto_terminado_id);
+    if TG_OP = 'UPDATE' and old.producto_terminado_id is distinct from new.producto_terminado_id then
+      perform public._recalcular_costo_producto(old.producto_terminado_id);
+    end if;
+    return new;
+  end if;
+end $$;
+
+drop trigger if exists trg_recetas_recalc on public.recetas;
+create trigger trg_recetas_recalc
+  after insert or update or delete on public.recetas
+  for each row execute function public._trg_recetas_recalc();
+
+create or replace function public._trg_productos_costo_insumo_recalc()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+declare r record;
+begin
+  if new.es_insumo and new.costo_ultimo is distinct from old.costo_ultimo then
+    for r in select distinct producto_terminado_id as pid from public.recetas where insumo_id = new.id loop
+      perform public._recalcular_costo_producto(r.pid);
+    end loop;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_productos_costo_insumo_recalc on public.productos;
+create trigger trg_productos_costo_insumo_recalc
+  after update on public.productos
+  for each row execute function public._trg_productos_costo_insumo_recalc();
+
+revoke all on function public._recalcular_costo_producto(bigint) from public, anon, authenticated;
+revoke all on function public._trg_recetas_recalc() from public, anon, authenticated;
+revoke all on function public._trg_productos_costo_insumo_recalc() from public, anon, authenticated;
+
 commit;
-
-
--- #####################################################################
--- ###  05_views.sql
--- #####################################################################
 
 -- =====================================================================
 -- CG DULCES · Vistas de análisis (solo lectura)
@@ -1502,4 +1529,3 @@ begin
 end $$;
 
 commit;
-

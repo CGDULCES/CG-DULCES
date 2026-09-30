@@ -4558,6 +4558,7 @@ async function openEditProduct(id) {
   const esConsumibleIlimitado = esBaldeHelado || esCoberturaHelado || CONSUMIBLES_ILIMITADOS.includes(p.nombre);
   const etiquetaUnidad = esBaldeHelado ? "bolas" : "usos";
   const etiquetaPaquete = esBaldeHelado ? "balde" : "paquete";
+  const tieneReceta = recetas.some((r) => r.producto_terminado_id === p.id);
   let rendimientosHtml = "";
   if (esConsumibleIlimitado) {
     const { data: rendimientos } = await sb.from("helado_rendimientos").select("*").eq("producto_id", id).order("created_at", { ascending: false }).limit(5);
@@ -4604,8 +4605,9 @@ async function openEditProduct(id) {
           <input id="edit-precio" type="number" value="${p.precio_venta}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
         </div>
         <div>
-          <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Costo (último)</label>
-          <input id="edit-costo" type="number" value="${p.costo_ultimo}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+          <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Costo (último)${tieneReceta ? " · automático por receta" : ""}</label>
+          <input id="edit-costo" type="number" value="${p.costo_ultimo}" ${tieneReceta ? "disabled" : ""} class="w-full ${tieneReceta ? "bg-[#EDE7F0] text-[#8a7d94]" : "bg-[#F7F3FA]"} rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+          ${tieneReceta ? `<p class="text-[11px] text-[#8a7d94] mt-1">Se calcula solo sumando el costo de los insumos de la receta.</p>` : ""}
         </div>
       </div>
 
@@ -4667,6 +4669,7 @@ async function openEditProduct(id) {
       <p class="text-[12px] font-semibold text-[#241C2E] mb-2">Receta (por cada 1 unidad producida)</p>
       <div id="receta-lista-${p.id}">${renderRecetaLista(p.id)}</div>
       <button onclick="agregarFilaReceta(${p.id})" class="text-[11px] text-[#6B2D5C] font-semibold mt-1 mb-3">+ Agregar insumo a la receta</button>
+      ${tieneReceta ? `<p class="text-[12px] text-[#241C2E] mb-3">Costo por receta: <span class="font-mono-num font-semibold">${fmt(p.costo_ultimo)}</span>${p.precio_venta > 0 ? ` · Margen: <span class="font-mono-num font-semibold">${Math.round(((p.precio_venta - p.costo_ultimo) / p.precio_venta) * 100)}%</span>` : ""}</p>` : ""}
 
       <p class="text-[12px] font-semibold text-[#241C2E] mb-2 pt-2 border-t border-black/[0.06]">Registrar producción</p>
       <p class="text-[11px] text-[#8a7d94] mb-2">Descuenta los insumos de la receta y suma al stock del producto.</p>

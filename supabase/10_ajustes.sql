@@ -1,52 +1,18 @@
 -- =====================================================================
--- CG DULCES · Triggers
--- =====================================================================
--- 1. Cada línea de compra deja registro en precio_historial
---    (para ver la evolución del costo por proveedor).
--- 2. Si el producto tiene vida_util_dias, se crea un lote con su
---    fecha de vencimiento estimada (para el módulo de Vencimientos).
---
--- Funcionan tanto si la compra entra por la RPC registrar_compra()
--- como si se sigue insertando desde el frontend viejo.
+-- CG DULCES · Ajuste 10 — Costo automático para productos con receta
+-- ---------------------------------------------------------------------
+-- Antes, el costo de un producto con receta (por ej. un postre) había
+-- que escribirlo a mano, y no se actualizaba solo aunque cambiaras la
+-- receta o subiera el precio de un insumo. Esto hace que el costo (y el
+-- margen que se ve en la app) se calcule solo, sumando lo que cuesta
+-- cada insumo de la receta, cada vez que:
+--   • agregás o quitás un insumo de una receta,
+--   • o cambia el costo de un insumo que se usa en alguna receta.
+-- No toca nada de productos que NO tienen receta cargada (esos siguen
+-- funcionando exactamente igual que antes, costo a mano).
 -- =====================================================================
 
 begin;
-
-create or replace function public._compra_item_after_insert()
-returns trigger
-language plpgsql security definer set search_path = public as $$
-declare
-  v_prov_id bigint;
-  v_vida int;
-  v_venc date;
-begin
-  select c.proveedor_id into v_prov_id from public.compras c where c.id = new.compra_id;
-
-  insert into public.precio_historial (producto_id, proveedor_id, compra_id, costo_unitario, fecha)
-  values (new.producto_id, v_prov_id, new.compra_id, new.costo_unitario, now());
-
-  select vida_util_dias into v_vida from public.productos where id = new.producto_id;
-  if v_vida is not null and v_vida > 0 then
-    v_venc := (now() at time zone 'America/Asuncion')::date + v_vida;
-    insert into public.lotes (producto_id, compra_id, cantidad, cantidad_restante, vencimiento, costo_unitario)
-    values (new.producto_id, new.compra_id, new.cantidad, new.cantidad, v_venc, new.costo_unitario);
-  end if;
-
-  return new;
-end $$;
-
-drop trigger if exists trg_compra_item_ai on public.compra_items;
-create trigger trg_compra_item_ai
-  after insert on public.compra_items
-  for each row execute function public._compra_item_after_insert();
-
-revoke all on function public._compra_item_after_insert() from public, anon, authenticated;
-
--- ---------------------------------------------------------------------
--- Costo automático de productos con receta: suma el costo de los
--- insumos cada vez que cambia la receta, o el costo de un insumo usado
--- en alguna receta. Ver 10_ajustes.sql para el detalle de por qué.
--- ---------------------------------------------------------------------
 
 create or replace function public._recalcular_costo_producto(p_producto_id bigint)
 returns void
@@ -103,8 +69,19 @@ create trigger trg_productos_costo_insumo_recalc
   after update on public.productos
   for each row execute function public._trg_productos_costo_insumo_recalc();
 
+-- Los helpers internos no se exponen a la API
 revoke all on function public._recalcular_costo_producto(bigint) from public, anon, authenticated;
 revoke all on function public._trg_recetas_recalc() from public, anon, authenticated;
 revoke all on function public._trg_productos_costo_insumo_recalc() from public, anon, authenticated;
+
+-- Recalcula ahora mismo el costo de todos los productos que ya tienen
+-- una receta cargada, para que arranquen con el número correcto.
+do $$
+declare r record;
+begin
+  for r in select distinct producto_terminado_id as pid from public.recetas loop
+    perform public._recalcular_costo_producto(r.pid);
+  end loop;
+end $$;
 
 commit;
