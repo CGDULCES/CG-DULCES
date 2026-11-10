@@ -61,21 +61,47 @@
   html, body { touch-action: manipulation; height: 100%; }
   /* La app ocupa justo el alto de la pantalla: no se mueve todo, solo se desliza el contenido */
   body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: none; }
-  #content { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; min-height: 0; }
+  #app-screen { --pad: 1.25rem; }
+  #content { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; min-height: 0; padding: var(--pad) var(--pad) 8rem; }
   #modal-box { overscroll-behavior: contain; }
   /* Encabezado fijo de cada pantalla (Volver + título) */
-  .cg-fijo { position: sticky; top: -1.25rem; z-index: 20; background: rgb(var(--cg-surface)); margin: -1.25rem -1.25rem 0.75rem; padding: 1.25rem 1.25rem 0.5rem; }
+  .cg-fijo { position: sticky; top: calc(var(--pad) * -1); z-index: 20; background: rgb(var(--cg-surface)); margin: calc(var(--pad) * -1) calc(var(--pad) * -1) 0.75rem; padding: var(--pad) var(--pad) 0.5rem; }
   .cg-fijo > :last-child { margin-bottom: 0; }
+
+  /* ===== Computadora / iPad horizontal (1024px o más): todo se extiende por la ventana ===== */
+  @media (min-width: 1024px) {
+    #app-screen { --pad: 2rem; --menu: 232px; display: grid; grid-template-columns: var(--menu) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+    #app-header { grid-column: 1 / -1; padding-left: 2rem; padding-right: 2rem; }
+    #nav-principal { grid-column: 1; grid-row: 2; border-radius: 0; box-shadow: 1px 0 0 rgb(var(--cg-line) / 0.06); padding: 1rem 0.75rem; overflow-y: auto; }
+    #nav-principal > div { flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 0.25rem; }
+    #nav-principal .tab-btn { flex-direction: row; justify-content: flex-start; align-items: center; gap: 0.85rem; padding: 0.8rem 1rem; }
+    #nav-principal .tab-btn .tab-pill { inset: 0; border-radius: 14px; }
+    #nav-principal .tab-btn span:not(.tab-pill) { font-size: 14px; }
+    #content { grid-column: 2; grid-row: 2; padding-bottom: 2.5rem; }
+    #cart-bar { left: calc(var(--menu) + 1rem); right: 1rem; bottom: 1rem; }
+    #add-product-fab { bottom: 1.5rem; right: 1.5rem; }
+    #login-screen { align-items: center; }
+    /* Listas de tarjetas en columnas */
+    #content .space-y-2:has(> .bg-cg-card), #content .space-y-3:has(> .bg-cg-card) { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 0.75rem; align-items: start; }
+    #content .space-y-2:has(> .bg-cg-card) > *, #content .space-y-3:has(> .bg-cg-card) > * { margin-top: 0; }
+    /* Inicio en dos columnas */
+    #content .cg-dash { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; align-items: start; }
+    #content .cg-dash > * { margin-top: 0; }
+    #content .cg-dash > :nth-child(-n+2) { grid-column: 1 / -1; }
+  }
+  @media (min-width: 1280px) {
+    #content .lg:grid-cols-4 { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  }
 </style>
 </head>
-<body class="w-full flex items-center justify-center p-0 sm:p-4">
+<body class="w-full flex items-center justify-center p-0 sm:p-4 lg:p-0">
 
 <!-- Pantalla de login -->
-<div id="login-screen" class="relative w-full max-w-[460px] md:max-w-none lg:max-w-[1100px] h-full sm:max-h-[860px] md:max-h-none sm:rounded-[2.25rem] sm:shadow-2xl sm:border sm:border-cg-line/5 bg-cg-surface overflow-hidden flex flex-col">
+<div id="login-screen" class="relative w-full max-w-[460px] md:max-w-none lg:max-w-none h-full sm:max-h-[860px] md:max-h-none lg:max-h-none sm:rounded-[2.25rem] lg:rounded-none sm:shadow-2xl lg:shadow-none sm:border lg:border-0 sm:border-cg-line/5 bg-cg-surface overflow-hidden flex flex-col">
   <div class="flex-1 flex flex-col items-center justify-center px-8">
     <img id="login-logo" src="assets/logo.png" alt="CG Dulces" class="w-[200px] h-auto mb-2" />
     <p class="text-[13px] text-cg-muted mb-8">Ingresá para ver el panel del negocio</p>
-    <form id="login-form" class="w-full space-y-3">
+    <form id="login-form" class="w-full max-w-[380px] space-y-3">
       <input id="login-email" type="text" required placeholder="Usuario" autocomplete="username"
         class="w-full bg-cg-card rounded-xl px-4 py-3 text-[14px] border border-cg-line/[0.06] outline-none focus:border-cg-primary" />
       <input id="login-password" type="password" required placeholder="Contraseña" autocomplete="current-password"
@@ -89,10 +115,10 @@
 </div>
 
 <!-- App -->
-<div id="app-screen" class="screen-hidden relative w-full max-w-[460px] md:max-w-none lg:max-w-[1100px] h-full sm:max-h-[860px] md:max-h-none sm:rounded-[2.25rem] sm:shadow-2xl sm:border sm:border-cg-line/5 bg-cg-surface overflow-hidden flex flex-col">
+<div id="app-screen" class="screen-hidden relative w-full max-w-[460px] md:max-w-none lg:max-w-none h-full sm:max-h-[860px] md:max-h-none lg:max-h-none sm:rounded-[2.25rem] lg:rounded-none sm:shadow-2xl lg:shadow-none sm:border lg:border-0 sm:border-cg-line/5 bg-cg-surface overflow-hidden flex flex-col">
 
   <!-- Encabezado -->
-  <div class="px-6 pt-6 pb-4 bg-cg-primary text-cg-onink shrink-0">
+  <div id="app-header" class="px-6 pt-6 pb-4 bg-cg-primary text-cg-onink shrink-0">
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-2.5">
         <img id="header-logo" src="assets/logo-mark.png" alt="" class="w-[30px] h-auto shrink-0 object-contain" />
@@ -109,7 +135,7 @@
   </div>
 
   <!-- Contenido -->
-  <div id="content" class="flex-1 overflow-y-auto px-5 pb-32 pt-5">
+  <div id="content" class="flex-1 overflow-y-auto">
     <p class="text-center text-[13px] text-cg-muted pt-10">Cargando...</p>
   </div>
 
@@ -119,8 +145,8 @@
   <!-- Botón flotante agregar producto -->
   <button id="add-product-fab" class="screen-hidden absolute bottom-[96px] right-4 w-12 h-12 rounded-full bg-cg-primary text-cg-onink text-[22px] shadow-xl items-center justify-center">+</button>
 
-  <!-- Navegación inferior -->
-  <div class="shrink-0 bg-cg-card rounded-t-[28px] shadow-[0_-8px_24px_-12px_rgba(36,28,46,0.18)] px-4 pt-3 pb-3">
+  <!-- Navegación inferior (en PC pasa a ser un menú lateral) -->
+  <div id="nav-principal" class="shrink-0 bg-cg-card rounded-t-[28px] shadow-[0_-8px_24px_-12px_rgba(36,28,46,0.18)] px-4 pt-3 pb-3">
     <div class="flex items-center justify-around">
       <button class="tab-btn flex flex-col items-center gap-1 py-2 px-3" data-tab="dashboard">
         <span class="tab-pill"></span>
@@ -690,7 +716,7 @@ function renderDashboard(content) {
   const recientes = ventasHistoricas.slice(0, 4);
 
   content.innerHTML = `
-    <div class="space-y-5">
+    <div class="space-y-5 cg-dash">
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div class="bg-cg-card rounded-2xl p-4 shadow-sm border border-cg-line/[0.04]">
           <p class="text-[11px] text-cg-muted font-medium mb-1">Ventas de la semana</p>
