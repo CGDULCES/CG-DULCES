@@ -337,7 +337,7 @@ async function loadPromociones() {
 }
 
 async function loadUsuarios() {
-  const { data, error } = await sb.from("usuarios_app").select("*").order("nombre");
+  const { data, error } = await sb.from("usuarios_app").select("*").eq("activo", true).order("nombre");
   if (error) { console.error(error); return; }
   usuarios = data;
 }
@@ -1844,8 +1844,9 @@ function openEditFechaReparto(ventaId) {
 async function saveEditFechaReparto(ventaId) {
   const fecha = document.getElementById("editreparto-fecha").value;
   const created_at = fechaOAhora(fecha);
-  await sb.from("ventas").update({ created_at }).eq("id", ventaId);
-  await registrarHistorial("ventas", ventaId, "editar", `Fecha de cuenta compartida corregida`);
+  try {
+    await CG.rpc.cambiarFechaVenta(ventaId, created_at, usuarios[0]?.nombre || "");
+  } catch (e) { alert(e.message); console.error(e); return; }
   closeModal();
   await loadAll();
   if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);

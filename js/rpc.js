@@ -56,6 +56,8 @@
       call("registrar_produccion", { p_producto_id: productoId, p_cantidad: cantidad, p_usuario: usuario || "" }),
     registrarPerdida: (payload) => call("registrar_perdida", { p: payload }),
     editarVenta: (payload) => call("editar_venta", { p: payload }),
+    cambiarFechaVenta: (ventaId, fecha, usuario) =>
+      call("cambiar_fecha_venta", { p_venta_id: ventaId, p_fecha: fecha, p_usuario: usuario || "" }),
     editarCompra: (payload) => call("editar_compra", { p: payload }),
     eliminarCompra: (compraId, usuario) =>
       call("eliminar_compra", { p_compra_id: compraId, p_usuario: usuario || "" }),
