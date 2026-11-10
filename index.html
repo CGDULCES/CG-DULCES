@@ -550,16 +550,8 @@ function renderDashboard(content) {
   const lowStock = productos.filter((p) => !p.es_insumo && p.nombre !== "Helado · Bola" && p.nombre !== "Helado · Pote 1/4" && p.stock <= p.stock_minimo);
   const recientes = ventasHistoricas.slice(0, 4);
 
-  const ultimoRespaldo = window.__config?.ultimo_respaldo ? new Date(window.__config.ultimo_respaldo) : null;
-  const diasSinRespaldo = ultimoRespaldo ? Math.floor((Date.now() - ultimoRespaldo.getTime()) / 86400000) : null;
-  const avisoRespaldo = diasSinRespaldo === null || diasSinRespaldo >= 7 ? `
-      <button onclick="irA('configuracion')" class="w-full text-left bg-[#FFF4E5] border border-[#B45309]/25 rounded-xl px-4 py-2.5">
-        <span class="text-[12px] text-[#B45309] font-semibold">${diasSinRespaldo === null ? "Todavía no hiciste ninguna copia de seguridad" : `Hace ${diasSinRespaldo} días que no hacés una copia de seguridad`} · Descargala desde Configuración ›</span>
-      </button>` : "";
-
   content.innerHTML = `
     <div class="space-y-5">
-      ${avisoRespaldo}
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
           <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Ventas de la semana</p>
@@ -711,12 +703,6 @@ function renderEstadoCaja() {
         <span class="text-[12px] text-[#D64545] font-semibold">Cobrar ›</span>
       </button>`;
   }
-
-  html += `
-    <button onclick="openDividirCuenta()" class="w-full flex items-center justify-center gap-2 bg-white border border-black/[0.06] rounded-xl px-4 py-2.5 mb-5">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6B2D5C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-      <span class="text-[12px] text-[#6B2D5C] font-semibold">Dividir cuenta entre varios clientes</span>
-    </button>`;
 
   return html;
 }
@@ -893,8 +879,7 @@ window.__divCuentaSeleccion = new Set();
 function openDividirCuenta() {
   if (!cajaRequerida()) return;
   window.__divCuentaSeleccion = new Set();
-  window.__divCuentaProductoId = ventasVisibles()[0]?.id;
-  window.__divCuentaCantidad = 1;
+  window.__divCuentaItems = [{ producto_id: ventasVisibles()[0]?.id, cantidad: 1 }];
   window.__divCuentaFecha = fechaLocalHoy();
   window.__divCuentaRedondeo = 0;
   renderDividirCuentaModal();
@@ -902,19 +887,21 @@ function openDividirCuenta() {
 
 function divCuentaPartes() {
   const productos_ = ventasVisibles();
-  const producto = productos_.find((p) => p.id === window.__divCuentaProductoId);
-  const totalReal = producto ? producto.precio_venta * window.__divCuentaCantidad : 0;
+  const totalReal = window.__divCuentaItems.reduce((s, it) => {
+    const p = productos_.find((pr) => pr.id === it.producto_id);
+    return s + (p ? p.precio_venta * it.cantidad : 0);
+  }, 0);
   const n = window.__divCuentaSeleccion.size;
   const red = window.__divCuentaRedondeo || 0;
   const porPersonaReal = n > 0 ? totalReal / n : 0;
   const porPersona = (red > 0 && n > 0) ? Math.ceil(porPersonaReal / red) * red : porPersonaReal;
   const totalCobrar = (red > 0 && n > 0) ? porPersona * n : totalReal;
-  return { producto, totalReal, n, red, porPersona, totalCobrar };
+  return { totalReal, n, red, porPersona, totalCobrar };
 }
 
 function renderDividirCuentaModal() {
   const productos_ = ventasVisibles();
-  const { producto, totalReal, n: cantidadSeleccionados, red, porPersona, totalCobrar } = divCuentaPartes();
+  const { totalReal, n: cantidadSeleccionados, red, porPersona, totalCobrar } = divCuentaPartes();
   const total = totalReal;
 
   showModal(`
@@ -923,13 +910,19 @@ function renderDividirCuentaModal() {
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Fecha</label>
     <input id="div-fecha" type="date" value="${window.__divCuentaFecha}" onchange="window.__divCuentaFecha = this.value" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
 
-    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Producto</label>
-    <select id="div-producto" onchange="cambiarProductoDivCuenta(this.value)" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">
-      ${productos_.map((p) => `<option value="${p.id}" ${p.id===window.__divCuentaProductoId?"selected":""}>${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</option>`).join("")}
-    </select>
-
-    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Cantidad</label>
-    <input id="div-cantidad" type="number" value="${window.__divCuentaCantidad}" onchange="cambiarCantidadDivCuenta(this.value)" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Productos</label>
+    <div class="space-y-2 mt-1 mb-2">
+      ${window.__divCuentaItems.map((it, i) => `
+      <div class="flex items-center gap-2">
+        <select onchange="cambiarProductoDivCuenta(${i}, this.value)" class="flex-1 min-w-0 bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[13px] outline-none">
+          ${productos_.map((p) => `<option value="${p.id}" ${p.id===it.producto_id?"selected":""}>${p.nombre}${p.presentacion ? " · " + p.presentacion : ""}</option>`).join("")}
+        </select>
+        <input type="number" min="1" value="${it.cantidad}" onchange="cambiarCantidadDivCuenta(${i}, this.value)" aria-label="Cantidad" class="w-16 bg-[#F7F3FA] rounded-xl px-2 py-2.5 text-[14px] text-center outline-none" />
+        ${window.__divCuentaItems.length > 1 ? `<button type="button" onclick="quitarItemDivCuenta(${i})" aria-label="Quitar producto" class="text-[#D64545] text-[18px] leading-none px-1">×</button>` : ""}
+      </div>`).join("")}
+    </div>
+    <button type="button" onclick="agregarItemDivCuenta()" class="text-[12px] text-[#6B2D5C] font-semibold mb-4">+ Agregar otro producto</button>
+    <br />
 
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">¿Entre quiénes se reparte?</label>
     <div class="space-y-1.5 mt-2 mb-4 max-h-[180px] overflow-y-auto">
@@ -971,12 +964,20 @@ function renderDividirCuentaModal() {
   `);
 }
 
-function cambiarProductoDivCuenta(id) {
-  window.__divCuentaProductoId = Number(id);
+function cambiarProductoDivCuenta(i, id) {
+  window.__divCuentaItems[i].producto_id = Number(id);
   renderDividirCuentaModal();
 }
-function cambiarCantidadDivCuenta(valor) {
-  window.__divCuentaCantidad = Number(valor) || 1;
+function cambiarCantidadDivCuenta(i, valor) {
+  window.__divCuentaItems[i].cantidad = Math.max(1, Number(valor) || 1);
+  renderDividirCuentaModal();
+}
+function agregarItemDivCuenta() {
+  window.__divCuentaItems.push({ producto_id: ventasVisibles()[0]?.id, cantidad: 1 });
+  renderDividirCuentaModal();
+}
+function quitarItemDivCuenta(i) {
+  window.__divCuentaItems.splice(i, 1);
   renderDividirCuentaModal();
 }
 function toggleClienteDivCuenta(id, checked) {
@@ -999,11 +1000,16 @@ let procesandoAccion = false;
 
 async function confirmarDividirCuenta() {
   if (procesandoAccion) return;
-  const producto = productos.find((p) => p.id === window.__divCuentaProductoId);
-  const cantidad = window.__divCuentaCantidad;
+  const items = window.__divCuentaItems.filter((it) => it.producto_id);
   const seleccion = [...window.__divCuentaSeleccion];
-  if (!producto) return;
-  if (cantidad > producto.stock) { alert(`No hay suficiente stock de "${producto.nombre}". Disponible: ${producto.stock}.`); return; }
+  if (items.length === 0) return;
+  const porProducto = {};
+  items.forEach((it) => { porProducto[it.producto_id] = (porProducto[it.producto_id] || 0) + it.cantidad; });
+  for (const [pid, cant] of Object.entries(porProducto)) {
+    const p = productos.find((pr) => pr.id === Number(pid));
+    if (!p) return;
+    if (cant > p.stock) { alert(`No hay suficiente stock de "${p.nombre}". Disponible: ${p.stock}.`); return; }
+  }
   if (seleccion.length < 2) { alert("Elegí al menos 2 clientes para dividir la cuenta."); return; }
   procesandoAccion = true;
 
@@ -1011,13 +1017,13 @@ async function confirmarDividirCuenta() {
   const red = window.__divCuentaRedondeo || 0;
   let montos = null;
   if (red > 0) {
-    const porPersona = Math.ceil((producto.precio_venta * cantidad) / seleccion.length / red) * red;
+    const { totalReal } = divCuentaPartes();
+    const porPersona = Math.ceil(totalReal / seleccion.length / red) * red;
     montos = seleccion.map(() => porPersona);
   }
   try {
     await CG.rpc.dividirCuenta({
-      producto_id: producto.id,
-      cantidad,
+      items: items.map((it) => ({ producto_id: it.producto_id, cantidad: it.cantidad })),
       registrado_por: usuarios[0]?.nombre || "",
       created_at: fechaOAhora(window.__divCuentaFecha),
       clientes: seleccion,
@@ -1097,6 +1103,10 @@ function renderVender(content) {
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8a7d94" stroke-width="2" stroke-linecap="round" class="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       <input id="buscar-vender-input" type="text" placeholder="Buscar producto..." value="${buscarVender}" oninput="cambiarBuscarVender(this.value)" class="w-full bg-white border border-black/[0.06] rounded-xl pl-9 pr-3 py-2.5 text-[13px] outline-none" />
     </div>
+    <button onclick="openDividirCuenta()" class="w-full flex items-center justify-center gap-2 bg-white border border-black/[0.06] rounded-xl px-4 py-2.5 mb-4">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#6B2D5C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <span class="text-[12px] text-[#6B2D5C] font-semibold">Dividir cuenta entre varios clientes</span>
+    </button>
   `;
 
   const termino = buscarVender.trim().toLowerCase();
@@ -2964,8 +2974,6 @@ async function descargarBackup() {
     a.download = `backup-cgdulces-${fechaLocalHoy()}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    await sb.from("configuracion").upsert([{ clave: "ultimo_respaldo", valor: new Date().toISOString() }]);
-    await loadConfiguracion();
   } catch (e) {
     alert("No se pudo generar la copia. Probá de nuevo.");
     console.error(e);

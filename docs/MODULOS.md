@@ -5,7 +5,7 @@ escribir en tablas de otro: lo hace llamando a la función del módulo dueño.
 
 **Regla de seguridad:** las tablas de dinero (marcadas con 🔒) son de solo lectura
 desde el navegador. Todo cambio pasa por funciones atómicas (todo o nada).
-El historial solo admite leer y agregar.
+Las ventas cargadas por error se siguen eliminando con "Eliminar venta" (función `anular_venta`).
 
 | Módulo | Tablas | Funciones (escritura) |
 |---|---|---|

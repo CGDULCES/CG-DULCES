@@ -6,9 +6,10 @@
 --   • Las tablas de plata (caja, caja_movimientos, cobros, ventas,
 --     venta_items, compras, compra_items) quedan de solo lectura desde
 --     el navegador. Todo cambio pasa por las funciones atómicas.
---   • El historial (auditoría) solo admite leer y agregar: no se puede
---     modificar ni borrar.
 --   • Se eliminan las políticas duplicadas.
+--   • El historial queda como estaba (se puede borrar); las ventas
+--     cargadas por error se siguen eliminando desde la app con "Eliminar
+--     venta" (función anular_venta, que devuelve stock y dinero a la caja).
 -- Para volver atrás: 13_ajustes_REVERTIR.sql
 -- =====================================================================
 
@@ -49,10 +50,5 @@ begin
     execute format('drop policy if exists app_write on public.%I', t);
   end loop;
 end $$;
-
--- 3) Auditoría: solo leer y agregar
-drop policy if exists app_write on public.historial;
-drop policy if exists historial_agregar on public.historial;
-create policy historial_agregar on public.historial for insert to authenticated with check (true);
 
 commit;
