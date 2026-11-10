@@ -13,7 +13,7 @@ Las ventas cargadas por error se siguen eliminando con "Eliminar venta" (funció
 | **Caja** | 🔒 `caja`, 🔒 `caja_movimientos` | `abrir_caja`, `cerrar_caja`, `registrar_movimiento_caja`, `saldos_caja`, `caja_abierta_id` |
 | **Clientes y créditos** | `clientes`, 🔒 `cobros` | `registrar_cobro`, `anular_cobro`, `editar_cobro` |
 | **Compras** | 🔒 `compras`, 🔒 `compra_items`, `proveedores`, `lotes`, `precio_historial` | `registrar_compra`, `editar_compra`, `eliminar_compra` |
-| **Inventario** | `productos`, `categorias`, `promociones`, `perdidas`, `helado_rendimientos` | `registrar_perdida` |
+| **Inventario** | `productos`, `categorias`, `promociones`, `perdidas`, `helado_rendimientos` | `registrar_perdida`, `terminar_consumible`, `agregar_consumible`, `continuar_consumible`, `productos_mas_vendidos` |
 | **Producción / recetas** | `recetas` (y costo automático de `productos`) | `registrar_produccion` (+ triggers de costo) |
 | **Sistema** | `usuarios_app`, `configuracion`, `historial`, `backups_log` | — |
 
