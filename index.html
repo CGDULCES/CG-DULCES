@@ -12,8 +12,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 <meta name="apple-mobile-web-app-title" content="CG Dulces" />
-<link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
-<link rel="icon" type="image/png" sizes="192x192" href="assets/icon-192.png" />
+<link id="apple-icon" rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+<link id="favicon" rel="icon" type="image/png" sizes="192x192" href="assets/icon-192.png" />
 
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
@@ -281,11 +281,13 @@ function aplicarMarca() {
   const logo = window.__config?.logo_negocio;
   const elNombre = document.getElementById("header-nombre");
   if (elNombre && nombre) elNombre.textContent = nombre;
-  if (logo && logo.startsWith("data:image/")) {
-    const h = document.getElementById("header-logo"); if (h) h.src = logo;
-    const l = document.getElementById("login-logo"); if (l) l.src = logo;
-    try { localStorage.setItem("cg_logo", logo); } catch {}
-  }
+  const propio = !!(logo && logo.startsWith("data:image/"));
+  const h = document.getElementById("header-logo"); if (h) h.src = propio ? logo : "assets/logo-mark.png";
+  const l = document.getElementById("login-logo"); if (l) l.src = propio ? logo : "assets/logo.png";
+  // Ícono de la pestaña del navegador
+  const fav = document.getElementById("favicon"); if (fav) { fav.href = propio ? logo : "assets/icon-192.png"; fav.type = "image/png"; }
+  const ap = document.getElementById("apple-icon"); if (ap) ap.href = propio ? logo : "assets/apple-touch-icon.png";
+  try { if (propio) localStorage.setItem("cg_logo", logo); else localStorage.removeItem("cg_logo"); } catch {}
 }
 // Unidad para redondear los importes SOLO en los mensajes de WhatsApp (0 = no redondear)
 function redondeoMensajes() {
@@ -2560,25 +2562,19 @@ function renderMasVendidos(content) {
   content.innerHTML = `
     ${volver}
     ${sectionLabel("Los 20 productos más vendidos")}
-    <p class="text-[11px] text-cg-muted mb-3">Ordenados por unidades vendidas en total. El promedio es por día, de los últimos 30 días.</p>
     <div class="space-y-2">
       ${lista.map((p, i) => `
         <div class="bg-cg-card rounded-2xl p-3.5 shadow-sm border border-cg-line/[0.04]">
-          <div class="flex items-start gap-3">
-            <span class="w-7 h-7 rounded-full ${i < 3 ? "bg-cg-primary text-cg-onink" : "bg-cg-surface text-cg-muted"} flex items-center justify-center text-[12px] font-semibold shrink-0">${i + 1}</span>
+          <div class="flex items-center gap-3">
+            <span class="w-8 h-8 rounded-full bg-cg-primary text-cg-onink flex items-center justify-center text-[13px] font-semibold shrink-0">${i + 1}</span>
             <div class="min-w-0 flex-1">
-              <div class="flex items-start justify-between gap-2">
-                <p class="text-[13px] font-semibold text-cg-ink leading-tight">${CG.escapeHtml(p.nombre)}${p.presentacion ? " · " + CG.escapeHtml(p.presentacion) : ""}</p>
-                <div class="text-right shrink-0">
-                  <p class="font-mono-num text-[14px] font-semibold text-cg-primary leading-tight">${num(p.unidades_total)} u.</p>
-                  <p class="text-[10px] text-cg-muted">en ${num(p.ventas_total)} compras</p>
-                </div>
-              </div>
-              <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1.5 text-[11px] text-cg-muted">
-                <span>Últimos 30 días: <strong class="text-cg-ink">${num(p.unidades_30d)} u.</strong></span>
-                <span>Promedio: <strong class="text-cg-ink">${num(p.promedio_diario_30d)} por día</strong></span>
-                <span>Stock: <strong class="${Number(p.stock) <= 0 ? "text-cg-danger" : "text-cg-ink"}">${num(p.stock)}</strong></span>
-              </div>
+              <p class="text-[13px] font-semibold text-cg-ink leading-tight">${CG.escapeHtml(p.nombre)}${p.presentacion ? " · " + CG.escapeHtml(p.presentacion) : ""}</p>
+              <p class="text-[11px] text-cg-muted mt-1">Últimos 30 días: <strong class="text-cg-ink">${num(p.unidades_30d)}</strong></p>
+              <p class="text-[11px] text-cg-muted">Promedio por día: <strong class="text-cg-ink">${num(p.promedio_diario_30d)}</strong></p>
+            </div>
+            <div class="text-right shrink-0">
+              <p class="font-mono-num text-[20px] font-semibold text-cg-primary leading-none">${num(p.unidades_total)}</p>
+              <p class="text-[10px] text-cg-muted mt-1">Vendidos</p>
             </div>
           </div>
         </div>`).join("")}
@@ -2641,7 +2637,7 @@ function renderAnalisis(content) {
     </div>
 
     <div class="bg-cg-card rounded-2xl p-4 shadow-sm border border-cg-line/[0.04] mb-4">
-      ${sectionLabel("Stock muerto (no se vende hace 60+ días)")}
+      ${sectionLabel("Stock muerto (no se vende hace 30+ días)")}
       ${a.muerto.length ? a.muerto.map(filaMuerto).join("") : `<p class="text-[12px] text-cg-success">✓ Nada dormido.</p>`}
     </div>
 
@@ -2906,6 +2902,7 @@ async function renderConfiguracion(content) {
   let personalizada = {};
   try { personalizada = cfg.paleta ? JSON.parse(cfg.paleta) : {}; } catch {}
   window.__paletaEdit = { ...PALETA_DEFECTO, ...personalizada };
+  window.__logoPendiente = null; // el logo solo cambia cuando tocás Guardar
 
   const filaColor = ([clave, nombre, donde]) => `
     <div class="flex items-center gap-3 py-2 border-t border-cg-line/[0.06] first:border-t-0">
@@ -2935,7 +2932,8 @@ async function renderConfiguracion(content) {
           </label>
         </div>
       </div>
-      <p class="text-[11px] text-cg-muted mb-3">Tocá el logo para cambiarlo por otra imagen.</p>
+      <p id="config-logo-aviso" class="text-[11px] text-cg-muted mb-1">Tocá el logo para elegir otra imagen. Se cambia recién cuando tocás <strong>Guardar</strong>.</p>
+      <button type="button" onclick="usarLogoOriginal()" class="text-[11px] text-cg-primary font-semibold mb-3">Volver al logo original</button>
       <button onclick="guardarConfiguracion()" class="w-full bg-cg-primary text-cg-onink font-semibold rounded-xl py-3">Guardar</button>
     </div>
 
@@ -3019,6 +3017,7 @@ async function restaurarPaleta() {
 }
 
 // ---- Logo y nombre ----
+// Elegir una imagen solo la muestra de prueba; se guarda recién con el botón Guardar.
 async function cambiarLogoNegocio(archivo) {
   if (!archivo) return;
   if (!archivo.type.startsWith("image/")) { alert("Elegí una imagen."); return; }
@@ -3040,19 +3039,31 @@ async function cambiarLogoNegocio(archivo) {
       };
       lector.readAsDataURL(archivo);
     });
-    const { error } = await sb.from("configuracion").upsert([{ clave: "logo_negocio", valor: url }]);
-    if (error) throw error;
-    await registrarHistorial("configuracion", null, "editar", "Logo del negocio cambiado");
-    await loadConfiguracion();
+    window.__logoPendiente = url;
     const prev = document.getElementById("config-logo-preview"); if (prev) prev.src = url;
-  } catch (e) { alert("No se pudo cambiar el logo. Probá con otra imagen."); console.error(e); }
+    const av = document.getElementById("config-logo-aviso"); if (av) av.innerHTML = "Logo nuevo elegido. Tocá <strong>Guardar</strong> para aplicarlo.";
+  } catch (e) { alert("No se pudo leer la imagen. Probá con otra."); console.error(e); }
+}
+function usarLogoOriginal() {
+  window.__logoPendiente = "ORIGINAL";
+  const prev = document.getElementById("config-logo-preview"); if (prev) prev.src = "assets/logo-mark.png";
+  const av = document.getElementById("config-logo-aviso"); if (av) av.innerHTML = "Se va a usar el logo original. Tocá <strong>Guardar</strong> para aplicarlo.";
 }
 async function guardarConfiguracion() {
   const valor = document.getElementById("config-nombre").value.trim();
   if (!valor) { alert("Poné el nombre del negocio."); return; }
   const { error } = await sb.from("configuracion").upsert([{ clave: "nombre_negocio", valor }]);
   if (error) { alert("No se pudo guardar."); console.error(error); return; }
-  await registrarHistorial("configuracion", null, "editar", `Nombre del negocio: ${valor}`);
+  let detalle = `Nombre del negocio: ${valor}`;
+  const pend = window.__logoPendiente;
+  if (pend) {
+    const r = pend === "ORIGINAL"
+      ? await sb.from("configuracion").delete().eq("clave", "logo_negocio")
+      : await sb.from("configuracion").upsert([{ clave: "logo_negocio", valor: pend }]);
+    if (r.error) { alert("El nombre se guardó, pero no se pudo cambiar el logo."); console.error(r.error); }
+    else { detalle += pend === "ORIGINAL" ? " · logo original" : " · logo nuevo"; window.__logoPendiente = null; }
+  }
+  await registrarHistorial("configuracion", null, "editar", detalle);
   await loadConfiguracion();
   alert("Guardado.");
 }
@@ -5206,6 +5217,8 @@ try {
   if (logoGuardado && logoGuardado.startsWith("data:image/")) {
     const l = document.getElementById("login-logo"); if (l) l.src = logoGuardado;
     const h = document.getElementById("header-logo"); if (h) h.src = logoGuardado;
+    const fav = document.getElementById("favicon"); if (fav) fav.href = logoGuardado;
+    const ap = document.getElementById("apple-icon"); if (ap) ap.href = logoGuardado;
   }
 } catch {}
 
