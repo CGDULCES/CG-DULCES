@@ -550,8 +550,16 @@ function renderDashboard(content) {
   const lowStock = productos.filter((p) => !p.es_insumo && p.nombre !== "Helado · Bola" && p.nombre !== "Helado · Pote 1/4" && p.stock <= p.stock_minimo);
   const recientes = ventasHistoricas.slice(0, 4);
 
+  const ultimoRespaldo = window.__config?.ultimo_respaldo ? new Date(window.__config.ultimo_respaldo) : null;
+  const diasSinRespaldo = ultimoRespaldo ? Math.floor((Date.now() - ultimoRespaldo.getTime()) / 86400000) : null;
+  const avisoRespaldo = diasSinRespaldo === null || diasSinRespaldo >= 7 ? `
+      <button onclick="irA('configuracion')" class="w-full text-left bg-[#FFF4E5] border border-[#B45309]/25 rounded-xl px-4 py-2.5">
+        <span class="text-[12px] text-[#B45309] font-semibold">${diasSinRespaldo === null ? "Todavía no hiciste ninguna copia de seguridad" : `Hace ${diasSinRespaldo} días que no hacés una copia de seguridad`} · Descargala desde Configuración ›</span>
+      </button>` : "";
+
   content.innerHTML = `
     <div class="space-y-5">
+      ${avisoRespaldo}
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
           <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Ventas de la semana</p>
@@ -2945,7 +2953,7 @@ async function descargarBackup() {
     const tablas = ["productos", "categorias", "clientes", "proveedores", "promociones", "ventas", "venta_items", "cobros", "compras", "compra_items", "caja", "caja_movimientos", "historial", "usuarios_app", "venta_repartos", "helado_rendimientos", "perdidas", "recetas", "configuracion"];
     const backup = { fecha: new Date().toISOString(), datos: {} };
     for (const t of tablas) {
-      const { data, error } = await selectTodo(t, "*", (q) => q.order("id"));
+      const { data, error } = await selectTodo(t, "*", (q) => q.order(t === "configuracion" ? "clave" : "id"));
       if (error) throw new Error(`No se pudo leer ${t}`);
       backup.datos[t] = data || [];
     }
@@ -2956,6 +2964,8 @@ async function descargarBackup() {
     a.download = `backup-cgdulces-${fechaLocalHoy()}.json`;
     a.click();
     URL.revokeObjectURL(url);
+    await sb.from("configuracion").upsert([{ clave: "ultimo_respaldo", valor: new Date().toISOString() }]);
+    await loadConfiguracion();
   } catch (e) {
     alert("No se pudo generar la copia. Probá de nuevo.");
     console.error(e);
