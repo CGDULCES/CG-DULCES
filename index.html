@@ -81,16 +81,25 @@
     #cart-bar { left: calc(var(--menu) + 1rem); right: 1rem; bottom: 1rem; }
     #add-product-fab { bottom: 1.5rem; right: 1.5rem; }
     #login-screen { align-items: center; }
-    /* Listas de tarjetas en columnas */
-    #content .space-y-2:has(> .bg-cg-card), #content .space-y-3:has(> .bg-cg-card) { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 0.75rem; align-items: start; }
-    #content .space-y-2:has(> .bg-cg-card) > *, #content .space-y-3:has(> .bg-cg-card) > * { margin-top: 0; }
-    /* Inicio en dos columnas */
-    #content .cg-dash { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; align-items: start; }
+    /* Listas de tarjetas en columnas parejas (todas del mismo alto en cada fila) */
+    #content .space-y-2:not(.cg-fila-lista):has(> .bg-cg-card), #content .space-y-3:not(.cg-fila-lista):has(> .bg-cg-card) { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 0.75rem; align-items: stretch; }
+    #content .space-y-2:not(.cg-fila-lista):has(> .bg-cg-card) > *, #content .space-y-3:not(.cg-fila-lista):has(> .bg-cg-card) > * { margin-top: 0; }
+    /* Listas "por fila": una debajo de otra, a todo el ancho */
+    #content .cg-fila-lista { display: flex; flex-direction: column; gap: 0.5rem; }
+    #content .cg-fila-lista > * { margin-top: 0; }
+    /* Inicio: números arriba, gráfico y reposición lado a lado, últimas ventas a todo el ancho */
+    #content .cg-dash { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; align-items: stretch; }
     #content .cg-dash > * { margin-top: 0; }
-    #content .cg-dash > :nth-child(-n+2) { grid-column: 1 / -1; }
+    #content .cg-dash > :nth-child(-n+2), #content .cg-dash > :last-child { grid-column: 1 / -1; }
+    #content .cg-dash > :nth-child(3):nth-last-child(2) { grid-column: 1 / -1; }
+    /* Botones de acción grandes: no se estiran por toda la pantalla */
+    #content > button.w-full.bg-cg-primary, #content > button.w-full.bg-cg-success { width: auto; min-width: 280px; max-width: 360px; display: block; margin-left: auto; }
+    /* Pantallas de formulario: columna centrada y cómoda */
+    #content[data-pantalla="configuracion"] > :not(.cg-fijo), #content[data-pantalla="reportes"] > :not(.cg-fijo) { max-width: 820px; margin-left: auto; margin-right: auto; }
+    #content[data-pantalla="configuracion"] > .cg-fijo { max-width: none; }
   }
   @media (min-width: 1280px) {
-    #content .lg:grid-cols-4 { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+    #content .lg\:grid-cols-4 { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
   }
 </style>
 </head>
@@ -660,6 +669,16 @@ function agruparPorCategoria(lista) {
   return grupos;
 }
 
+// Fila de "tabla" que solo se ve en computadora (en celular se usa la tarjeta de siempre)
+const COLS_VENTAS = "110px 190px minmax(0,1fr) 190px 130px 150px";
+const COLS_COMPRAS = "110px 220px 130px minmax(0,1fr) 140px";
+const COLS_CAJA = "110px 190px minmax(0,1fr) 130px 140px 140px";
+function celdasPC(cols, celdas) {
+  return `<div class="hidden lg:grid items-center gap-4 px-4 py-2.5" style="grid-template-columns:${cols}">${celdas.map((c) => `<div class="min-w-0">${c}</div>`).join("")}</div>`;
+}
+function encabezadoPC(cols, titulos) {
+  return `<div class="hidden lg:grid gap-4 px-4 text-[10px] font-semibold uppercase tracking-wider text-cg-muted mb-1" style="grid-template-columns:${cols}">${titulos.map((t, i) => `<div class="${/^>/.test(t) ? "text-right" : ""}">${t.replace(/^>/, "")}</div>`).join("")}</div>`;
+}
 function sectionLabel(text) {
   return `<p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-cg-muted mb-2">${text}</p>`;
 }
@@ -685,6 +704,7 @@ function render() {
   const content = document.getElementById("content");
   const mapaGrupo = { "proveedores": "compras", "cliente-detalle": "clientes", "auditoria": "", "masopciones": "", "reportes": "", "promociones": "", "configuracion": "", "todas-ventas": "dashboard", "perdidas": "", "categorias": "", "masvendidos": "", "analisis": "" };
   const grupoActivo = mapaGrupo[activeTab] || activeTab;
+  content.dataset.pantalla = activeTab;
   document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === grupoActivo));
   document.getElementById("add-product-fab").classList.toggle("screen-hidden", activeTab !== "inventario");
   document.getElementById("add-product-fab").classList.toggle("flex", activeTab === "inventario");
@@ -1910,7 +1930,7 @@ function renderClienteDetalle(content) {
         ${todasLasPendientesSeleccionadas() ? "Deseleccionar todas" : "Seleccionar todas las deudas"}
       </button>` : ""}
     </div>
-    <div class="space-y-2 mb-4">
+    <div class="space-y-2 mb-4 cg-fila-lista">
       ${ventas.length === 0 ? `<p class="text-[13px] text-cg-muted">Todavía no tiene compras registradas.</p>` :
         ventas.map((v) => {
           const pagado = pagadoDeVenta(v.id);
@@ -1949,7 +1969,7 @@ function renderClienteDetalle(content) {
 
     ${repartos.length > 0 ? `
     ${sectionLabel("Cuentas compartidas")}
-    <div class="space-y-2 mb-4">
+    <div class="space-y-2 mb-4 cg-fila-lista">
       ${repartos.map((r) => {
         const pagado = pagadoDeReparto(r.venta_id);
         const pendiente = Math.max(0, r.monto - pagado);
@@ -3201,7 +3221,8 @@ function renderTodasVentas(content) {
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="rgb(var(--cg-muted))" stroke-width="2" stroke-linecap="round" class="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
       <input id="buscar-todasventas-input" type="text" placeholder="Buscar por cliente o producto..." value="${buscarTodasVentas}" oninput="cambiarBuscarTodasVentas(this.value)" class="w-full bg-cg-card border border-cg-line/[0.06] rounded-xl pl-9 pr-3 py-2.5 text-[13px] outline-none" />
     </div>
-    <div class="space-y-2">
+    ${filtradas.length ? encabezadoPC(COLS_VENTAS, ["Fecha", "Cliente", "Productos", "Estado", ">Total", ">Acciones"]) : ""}
+    <div class="space-y-2 cg-fila-lista">
       ${filtradas.length === 0 ? `<p class="text-[13px] text-cg-muted">No encontré ventas con ese criterio.</p>` :
         filtradas.map((v) => {
           const fechaHora = new Date(v.created_at).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Asuncion" });
@@ -3210,8 +3231,21 @@ function renderTodasVentas(content) {
           const participantes = esDividida ? v.venta_repartos.map((r) => r.clientes?.nombre || "").join(", ") : "";
           const pagadoDeEsta = cobros.filter((c) => c.venta_id === v.id).reduce((s, c) => s + Number(c.monto), 0);
           const estadoTexto = !v.es_fiado ? v.medio_pago : (pagadoDeEsta < Number(v.total) ? "Fiado, pendiente" : "Fiado, cobrado");
+          const accionesHtml = `${esDividida
+            ? `<button onclick="openEditReparto(${v.id})" class="text-[11px] text-cg-primary font-semibold">Editar división</button>`
+            : `<button onclick="openEditVenta(${v.id})" class="text-[11px] text-cg-primary font-semibold">Editar</button>`}
+            <button onclick="deleteVentaDesdeTodas(${v.id})" class="text-[11px] text-cg-danger font-semibold">Eliminar</button>`;
+          const filaVentaPC = celdasPC(COLS_VENTAS, [
+            `<span class="text-[12px] text-cg-muted">${fechaHora}</span>`,
+            `<span class="text-[13px] font-semibold text-cg-ink">${CG.escapeHtml(v.clientes?.nombre || "Mostrador")}</span>`,
+            `<span class="text-[12px] text-cg-ink">${itemsTexto}${esDividida ? `<br><span class="text-cg-primary">👥 Dividida entre: ${CG.escapeHtml(participantes)}</span>` : ""}</span>`,
+            `<span class="text-[11px] ${v.es_fiado && pagadoDeEsta < Number(v.total) ? "text-cg-danger font-semibold" : "text-cg-muted"}">${estadoTexto} · ${CG.escapeHtml(v.registrado_por || "")}</span>`,
+            `<span class="font-mono-num text-[13px] font-semibold block text-right">${fmt(v.total)}</span>`,
+            `<span class="flex items-center justify-end gap-3">${accionesHtml}</span>`,
+          ]);
           return `
-          <div class="bg-cg-card rounded-2xl p-4 shadow-sm border border-cg-line/[0.04]">
+          <div class="bg-cg-card rounded-2xl p-4 lg:p-0 shadow-sm border border-cg-line/[0.04]">
+            <div class="lg:hidden">
             <div class="flex items-center justify-between mb-1">
               <span class="text-[11px] text-cg-muted">${fechaHora}${v.clientes?.nombre ? " · " + v.clientes.nombre : ""}</span>
               <span class="font-mono-num text-[13px] font-semibold">${fmt(v.total)}</span>
@@ -3227,6 +3261,8 @@ function renderTodasVentas(content) {
                 <button onclick="deleteVentaDesdeTodas(${v.id})" class="text-[11px] text-cg-danger font-semibold">Eliminar</button>
               </div>
             </div>
+            </div>
+            ${filaVentaPC}
           </div>`;
         }).join("")}
     </div>
@@ -3348,9 +3384,18 @@ async function renderCaja(content) {
       const idx = window.__cajaGrupos.push(b) - 1;
       const cli = clientes.find((c) => c.id === b.cliente_id);
       const nVentas = new Set(b.partes.map((p) => p.venta_id).filter(Boolean)).size;
+      const fechaPC = new Date(b.fecha).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"});
+      const filaPC = celdasPC(COLS_CAJA, [
+        `<span class="text-[12px] text-cg-muted">${fechaPC}</span>`,
+        `<span class="text-[13px] font-semibold text-cg-ink">Cobro · ${b.esBanco ? "Banco" : "Efectivo"}</span>`,
+        `<span class="text-[12px] text-cg-ink">${cli ? CG.escapeHtml(cli.nombre) : "Cliente"}${nVentas > 0 ? ` · ${nVentas} venta${nVentas>1?"s":""}` : ""} · <span class="text-cg-primary font-semibold">Ver detalle ›</span></span>`,
+        `<span class="font-mono-num text-[13px] font-semibold text-cg-success block text-right">+${fmt(b.monto)}</span>`,
+        `<span class="font-mono-num text-[12px] text-cg-muted block text-right">${fmt(b.saldoEfectivo)}</span>`,
+        `<span class="font-mono-num text-[12px] text-cg-muted block text-right">${fmt(b.saldoBanco)}</span>`,
+      ]);
       return `
       <div class="bg-cg-card rounded-xl shadow-sm border border-cg-line/[0.04] overflow-hidden">
-        <button type="button" onclick="openCobroGrupo(${idx})" class="w-full text-left p-3">
+        <button type="button" onclick="openCobroGrupo(${idx})" class="w-full text-left p-3 lg:hidden">
           <div class="flex items-center justify-between">
             <span class="text-[12px] font-semibold text-cg-ink">Cobro${cli ? " · " + CG.escapeHtml(cli.nombre) : ""} · ${b.esBanco ? "Banco" : "Efectivo"}</span>
             <span class="font-mono-num text-[12px] font-semibold text-cg-success">+${fmt(b.monto)}</span>
@@ -3358,25 +3403,39 @@ async function renderCaja(content) {
           <p class="text-[10px] text-cg-muted">${new Date(b.fecha).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}${nVentas > 0 ? ` · ${nVentas} venta${nVentas>1?"s":""}` : ""} · <span class="text-cg-primary font-semibold">Ver detalle ›</span></p>
           <p class="text-[9px] text-cg-muted mt-0.5">Saldo después: efectivo ${fmt(b.saldoEfectivo)} · banco ${fmt(b.saldoBanco)}</p>
         </button>
+        <div onclick="openCobroGrupo(${idx})" role="button" class="hidden lg:block cursor-pointer hover:bg-cg-surface">${filaPC}</div>
       </div>`;
     }
     const m = b.data;
     const monto = Number(m.monto);
     const esVentaTocable = m.tipo === "venta" && m.venta_id;
+    const fechaMovPC = new Date(m.fecha).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"});
+    const filaMovPC = celdasPC(COLS_CAJA, [
+      `<span class="text-[12px] text-cg-muted">${fechaMovPC}</span>`,
+      `<span class="text-[13px] font-semibold text-cg-ink">${TIPO_LABEL[m.tipo] || m.tipo} · ${b.esBanco ? "Banco" : "Efectivo"}</span>`,
+      `<span class="text-[12px] text-cg-ink">${CG.escapeHtml(m.descripcion || "—")}${esVentaTocable ? ` · <span class="text-cg-primary font-semibold">Ver detalle ›</span>` : ""}</span>`,
+      `<span class="font-mono-num text-[13px] font-semibold block text-right ${b.signo>0?'text-cg-success':'text-cg-danger'}">${b.signo>0?"+":"−"}${fmt(monto)}</span>`,
+      `<span class="font-mono-num text-[12px] text-cg-muted block text-right">${fmt(b.saldoEfectivo)}</span>`,
+      `<span class="font-mono-num text-[12px] text-cg-muted block text-right">${fmt(b.saldoBanco)}</span>`,
+    ]);
     return `
-      <div ${esVentaTocable ? `onclick="abrirVentaDeCaja(${m.venta_id}, ${m.caja_id})" role="button"` : ""} class="bg-cg-card rounded-xl p-3 shadow-sm border border-cg-line/[0.04] ${esVentaTocable ? "cursor-pointer" : ""}">
+      <div ${esVentaTocable ? `onclick="abrirVentaDeCaja(${m.venta_id}, ${m.caja_id})" role="button"` : ""} class="bg-cg-card rounded-xl p-3 lg:p-0 shadow-sm border border-cg-line/[0.04] ${esVentaTocable ? "cursor-pointer hover:bg-cg-surface" : ""}">
+        <div class="lg:hidden">
         <div class="flex items-center justify-between">
           <span class="text-[12px] font-semibold text-cg-ink">${TIPO_LABEL[m.tipo] || m.tipo} · ${b.esBanco ? "Banco" : "Efectivo"}</span>
           <span class="font-mono-num text-[12px] font-semibold ${b.signo>0?'text-cg-success':'text-cg-danger'}">${b.signo>0?"+":"−"}${fmt(monto)}</span>
         </div>
         <p class="text-[10px] text-cg-muted">${new Date(m.fecha).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}${m.descripcion ? " · " + m.descripcion : ""}${esVentaTocable ? ` · <span class="text-cg-primary font-semibold">Ver detalle ›</span>` : ""}</p>
         <p class="text-[9px] text-cg-muted mt-0.5">Saldo después: efectivo ${fmt(b.saldoEfectivo)} · banco ${fmt(b.saldoBanco)}</p>
+        </div>
+        ${filaMovPC}
       </div>`;
   }).join("");
 
   content.innerHTML = renderEstadoCaja() + `
     ${sectionLabel(`Movimientos de caja (${todasLasCajas.length} caja${todasLasCajas.length>1?'s':''} en total)`)}
-    <div class="space-y-2">${filasHtml}</div>
+    ${encabezadoPC(COLS_CAJA, ["Fecha", "Tipo", "Detalle", ">Monto", ">Saldo efectivo", ">Saldo banco"])}
+    <div class="space-y-2 cg-fila-lista">${filasHtml}</div>
   `;
 }
 
@@ -3954,16 +4013,26 @@ function renderCompras(content) {
       ${sectionLabel("Compras registradas")}
       <button onclick="irA('proveedores')" class="text-[12px] text-cg-primary font-semibold">Proveedores ›</button>
     </div>
-    <div class="space-y-2 mb-4">
+    ${compras.length ? encabezadoPC(COLS_COMPRAS, ["Fecha", "Proveedor", "Tipo", "Productos", ">Total"]) : ""}
+    <div class="space-y-2 mb-4 cg-fila-lista">
       ${compras.length === 0 ? `<p class="text-[13px] text-cg-muted">Todavía no registraste compras.</p>` :
         compras.map((c) => `
-        <button onclick="openEditCompra(${c.id})" class="w-full text-left bg-cg-card rounded-2xl p-4 shadow-sm border border-cg-line/[0.04]">
+        <button onclick="openEditCompra(${c.id})" class="w-full text-left bg-cg-card rounded-2xl p-4 lg:p-0 shadow-sm border border-cg-line/[0.04] hover:bg-cg-surface">
+          <div class="lg:hidden">
           <div class="flex items-center justify-between mb-1">
             <span class="text-[13px] font-semibold text-cg-ink">${c.proveedores?.nombre || "Sin proveedor"}</span>
             <span class="font-mono-num text-[13px] font-semibold">${fmt(c.total)}</span>
           </div>
           <p class="text-[11px] text-cg-muted">${c.tipo === "insumos" ? "Insumos" : "Mercadería"} · ${new Date(c.created_at).toLocaleDateString("es-PY")}</p>
           <p class="text-[12px] text-cg-ink mt-1">${(c.compra_items||[]).map(it=>`${it.cantidad}× ${it.productos?.nombre||""}`).join(", ")}</p>
+          </div>
+          ${celdasPC(COLS_COMPRAS, [
+            `<span class="text-[12px] text-cg-muted">${new Date(c.created_at).toLocaleDateString("es-PY")}</span>`,
+            `<span class="text-[13px] font-semibold text-cg-ink">${CG.escapeHtml(c.proveedores?.nombre || "Sin proveedor")}</span>`,
+            `<span class="text-[12px] text-cg-muted">${c.tipo === "insumos" ? "Insumos" : "Mercadería"}</span>`,
+            `<span class="text-[12px] text-cg-ink">${CG.escapeHtml((c.compra_items||[]).map(it=>`${it.cantidad}× ${it.productos?.nombre||""}`).join(", "))}</span>`,
+            `<span class="font-mono-num text-[13px] font-semibold block text-right">${fmt(c.total)}</span>`,
+          ])}
         </button>`).join("")}
     </div>
     <button onclick="openNewCompra()" class="w-full bg-cg-primary text-cg-onink font-semibold rounded-xl py-3">+ Nueva compra</button>
