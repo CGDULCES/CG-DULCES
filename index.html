@@ -205,6 +205,28 @@ function redondeoMensajes() {
   return Number(window.__config?.redondeo_mensajes || 0) || 0;
 }
 
+let ocultarMontos = (() => { try { return localStorage.getItem("cg_ocultar_montos") === "1"; } catch { return false; } })();
+const montoCaja = (n) => (ocultarMontos ? "••••••" : fmt(n));
+function toggleOcultarMontos() {
+  ocultarMontos = !ocultarMontos;
+  try { localStorage.setItem("cg_ocultar_montos", ocultarMontos ? "1" : "0"); } catch {}
+  render();
+}
+
+// Supabase devuelve como máximo 1000 filas por consulta; esto trae TODAS por páginas.
+async function selectTodo(tabla, columnas, ajustar) {
+  let todo = [];
+  while (true) {
+    let q = sb.from(tabla).select(columnas);
+    if (ajustar) q = ajustar(q);
+    const { data, error } = await q.range(todo.length, todo.length + 999);
+    if (error) return { data: null, error };
+    if (!data.length) break;
+    todo = todo.concat(data);
+  }
+  return { data: todo, error: null };
+}
+
 async function loadAll() {
   await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras(), loadClientes(), loadVentasClientes(), loadCobros(), loadCaja(), loadHistorial(), loadRepartosClientes(), loadRecetas(), loadConfiguracion()]);
   render();
@@ -217,7 +239,7 @@ async function loadRecetas() {
 }
 
 async function loadRepartosClientes() {
-  const { data, error } = await sb.from("venta_repartos").select("*");
+  const { data, error } = await selectTodo("venta_repartos", "*", (q) => q.order("id"));
   if (error) { console.error(error); return; }
   repartosClientes = data;
 }
@@ -227,7 +249,7 @@ async function loadCaja() {
   if (error) { console.error(error); return; }
   cajaActual = data && data.length ? data[0] : null;
   if (cajaActual) {
-    const { data: movs, error: movError } = await sb.from("caja_movimientos").select("*").eq("caja_id", cajaActual.id).order("fecha", { ascending: false });
+    const { data: movs, error: movError } = await selectTodo("caja_movimientos", "*", (q) => q.eq("caja_id", cajaActual.id).order("fecha", { ascending: false }).order("id"));
     if (!movError) cajaMovimientos = movs;
   } else {
     cajaMovimientos = [];
@@ -253,13 +275,13 @@ async function loadClientes() {
 }
 
 async function loadVentasClientes() {
-  const { data, error } = await sb.from("ventas").select("id, cliente_id, total, es_fiado, created_at").not("cliente_id", "is", null);
+  const { data, error } = await selectTodo("ventas", "id, cliente_id, total, es_fiado, created_at", (q) => q.not("cliente_id", "is", null).order("id"));
   if (error) { console.error(error); return; }
   ventasClientes = data;
 }
 
 async function loadCobros() {
-  const { data, error } = await sb.from("cobros").select("*").order("created_at", { ascending: false });
+  const { data, error } = await selectTodo("cobros", "*", (q) => q.order("created_at", { ascending: false }).order("id"));
   if (error) { console.error(error); return; }
   cobros = data;
 }
@@ -643,16 +665,23 @@ function renderEstadoCaja() {
       <div class="bg-[#241C2E] rounded-2xl p-4 mb-5">
         <div class="flex items-center justify-between mb-3">
           <p class="text-white/60 text-[11px]">Caja abierta desde ${new Date(cajaActual.fecha_apertura).toLocaleDateString("es-PY")}</p>
-          <button onclick="openCerrarCaja()" class="text-[11px] text-white/70 underline">Cerrar caja</button>
+          <div class="flex items-center gap-3">
+            <button onclick="toggleOcultarMontos()" aria-label="${ocultarMontos ? "Mostrar montos" : "Ocultar montos"}" class="text-white/70">
+              ${ocultarMontos
+                ? `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`
+                : `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`}
+            </button>
+            <button onclick="openCerrarCaja()" class="text-[11px] text-white/70 underline">Cerrar caja</button>
+          </div>
         </div>
         <div class="grid grid-cols-2 gap-2 mb-3">
           <div class="bg-white/10 rounded-xl p-3">
             <p class="text-white/60 text-[10px]">Efectivo</p>
-            <p class="text-white font-mono-num text-[16px] font-semibold">${fmt(efectivo)}</p>
+            <p class="text-white font-mono-num text-[16px] font-semibold">${montoCaja(efectivo)}</p>
           </div>
           <div class="bg-white/10 rounded-xl p-3">
             <p class="text-white/60 text-[10px]">Cuenta bancaria</p>
-            <p class="text-white font-mono-num text-[16px] font-semibold">${fmt(banco)}</p>
+            <p class="text-white font-mono-num text-[16px] font-semibold">${montoCaja(banco)}</p>
           </div>
         </div>
         <div class="grid grid-cols-2 gap-2">
@@ -2666,11 +2695,7 @@ window.__reportesPeriodo = "mes";
 let reportesChartInstance = null;
 
 async function abrirReportes() {
-  const { data } = await sb
-    .from("ventas")
-    .select("id, total, created_at, venta_items(cantidad, subtotal, costo_unitario, productos(nombre, categoria_id))")
-    .order("created_at", { ascending: false })
-    .limit(1000);
+  const { data } = await selectTodo("ventas", "id, total, created_at, venta_items(cantidad, subtotal, costo_unitario, productos(nombre, categoria_id))", (q) => q.order("created_at", { ascending: false }).order("id"));
   window.__reportesVentas = data || [];
   activeTab = "reportes";
   render();
@@ -2954,7 +2979,8 @@ async function descargarBackup() {
     const tablas = ["productos", "categorias", "clientes", "proveedores", "promociones", "ventas", "venta_items", "cobros", "compras", "compra_items", "caja", "caja_movimientos", "historial", "usuarios_app", "venta_repartos", "helado_rendimientos", "perdidas", "recetas", "configuracion"];
     const backup = { fecha: new Date().toISOString(), datos: {} };
     for (const t of tablas) {
-      const { data } = await sb.from(t).select("*");
+      const { data, error } = await selectTodo(t, "*", (q) => q.order("id"));
+      if (error) throw new Error(`No se pudo leer ${t}`);
       backup.datos[t] = data || [];
     }
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
@@ -3098,7 +3124,7 @@ async function renderCaja(content) {
 
   // Traer TODAS las cajas que existieron alguna vez, en orden, con sus movimientos
   const { data: todasLasCajas } = await sb.from("caja").select("*").order("fecha_apertura", { ascending: true });
-  const { data: todosLosMovs } = await sb.from("caja_movimientos").select("*").order("fecha", { ascending: true });
+  const { data: todosLosMovs } = await selectTodo("caja_movimientos", "*", (q) => q.order("fecha", { ascending: true }).order("id"));
 
   if (!todasLasCajas || todasLasCajas.length === 0) {
     content.innerHTML = renderEstadoCaja() + `
@@ -3170,7 +3196,7 @@ async function renderCaja(content) {
           <span class="font-mono-num text-[12px] font-semibold ${b.signo>0?'text-[#2F9E7A]':'text-[#D64545]'}">${b.signo>0?"+":"−"}${fmt(monto)}</span>
         </div>
         <p class="text-[10px] text-[#8a7d94]">${new Date(m.fecha).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}${m.descripcion ? " · " + m.descripcion : ""}</p>
-        <p class="text-[9px] text-[#8a7d94] mt-0.5">Saldo después: efectivo ${fmt(b.saldoEfectivo)} · banco ${fmt(b.saldoBanco)}</p>
+        <p class="text-[9px] text-[#8a7d94] mt-0.5">Saldo después: efectivo ${montoCaja(b.saldoEfectivo)} · banco ${montoCaja(b.saldoBanco)}</p>
       </div>`;
   }).join("");
 
@@ -3178,11 +3204,11 @@ async function renderCaja(content) {
     <div class="grid grid-cols-2 gap-3 mb-3">
       <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
         <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Efectivo (según todo el historial)</p>
-        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(efectivoFinal)}</p>
+        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${montoCaja(efectivoFinal)}</p>
       </div>
       <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
         <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Banco (según todo el historial)</p>
-        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${fmt(bancoFinal)}</p>
+        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${montoCaja(bancoFinal)}</p>
       </div>
     </div>
 
