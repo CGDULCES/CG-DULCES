@@ -55,6 +55,10 @@
     registrarProduccion: (productoId, cantidad, usuario) =>
       call("registrar_produccion", { p_producto_id: productoId, p_cantidad: cantidad, p_usuario: usuario || "" }),
     registrarPerdida: (payload) => call("registrar_perdida", { p: payload }),
+    editarVenta: (payload) => call("editar_venta", { p: payload }),
+    editarCompra: (payload) => call("editar_compra", { p: payload }),
+    eliminarCompra: (compraId, usuario) =>
+      call("eliminar_compra", { p_compra_id: compraId, p_usuario: usuario || "" }),
   };
 
   root.CG = root.CG || {};

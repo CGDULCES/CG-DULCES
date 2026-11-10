@@ -1487,62 +1487,22 @@ async function saveEditVenta() {
   const cliente_id = window.__editVentaClienteId;
   const created_at = fechaOAhora(window.__editVentaFecha);
 
-  // Validar antes de escribir nada: que ningún ajuste deje el stock en negativo
-  for (const it of window.__editVentaItems) {
-    const original = window.__editVentaOriginalItems.find((o) => o.id === it.id);
-    const delta = it.cantidad - (original?.cantidad || 0); // + = se vende más, resta más stock
-    const p = productos.find((pr) => pr.id === it.producto_id);
-    if (p && p.stock - delta < 0) {
-      alert(`Ese cambio dejaría el stock de "${p.nombre}" en negativo.`);
-      return;
-    }
-  }
-
-  // Aplicar cambios de stock
-  for (const it of window.__editVentaItems) {
-    if (it.id) {
-      const original = window.__editVentaOriginalItems.find((o) => o.id === it.id);
-      const delta = it.cantidad - (original?.cantidad || 0);
-      const p = productos.find((pr) => pr.id === it.producto_id);
-      if (p) await sb.from("productos").update({ stock: p.stock - delta }).eq("id", p.id);
-      const subtotal = it.cantidad * it.precio_unitario - it.descuento;
-      await sb.from("venta_items").update({ producto_id: it.producto_id, cantidad: it.cantidad, precio_unitario: it.precio_unitario, subtotal }).eq("id", it.id);
-    } else {
-      const p = productos.find((pr) => pr.id === it.producto_id);
-      if (p) await sb.from("productos").update({ stock: p.stock - it.cantidad }).eq("id", p.id);
-      const subtotal = it.cantidad * it.precio_unitario - it.descuento;
-      await sb.from("venta_items").insert({ venta_id: ventaId, producto_id: it.producto_id, cantidad: it.cantidad, precio_unitario: it.precio_unitario, costo_unitario: it.costo_unitario, descuento: it.descuento, subtotal });
-    }
-  }
-  for (const original of window.__editVentaOriginalItems) {
-    const sigueExistiendo = window.__editVentaItems.some((it) => it.id === original.id);
-    if (!sigueExistiendo) {
-      const p = productos.find((pr) => pr.id === original.producto_id);
-      if (p) await sb.from("productos").update({ stock: p.stock + original.cantidad }).eq("id", p.id);
-      await sb.from("venta_items").delete().eq("id", original.id);
-    }
-  }
-
-  const subtotalTotal = window.__editVentaItems.reduce((s, it) => s + it.cantidad * it.precio_unitario, 0);
-  const descuentoTotal = window.__editVentaItems.reduce((s, it) => s + it.descuento, 0);
-  const total = subtotalTotal - descuentoTotal;
-
-  await sb.from("ventas").update({ cliente_id, subtotal: subtotalTotal, descuento_total: descuentoTotal, total, created_at }).eq("id", ventaId);
-
-  // Si no era fiada, ajustar el movimiento de caja al nuevo total (mismo reparto efectivo/transferencia que tenía)
-  const { data: ventaActual } = await sb.from("ventas").select("es_fiado, monto_efectivo, monto_transferencia").eq("id", ventaId).single();
-  if (ventaActual && !ventaActual.es_fiado) {
-    const totalAnterior = Number(ventaActual.monto_efectivo || 0) + Number(ventaActual.monto_transferencia || 0);
-    const ratioEfectivo = totalAnterior > 0 ? Number(ventaActual.monto_efectivo || 0) / totalAnterior : 1;
-    const nuevoEfectivo = Math.round(total * ratioEfectivo);
-    const nuevaTransferencia = total - nuevoEfectivo;
-    await sb.from("caja_movimientos").delete().eq("venta_id", ventaId).is("cobro_id", null);
-    if (nuevoEfectivo > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual?.id, tipo: "venta", monto: nuevoEfectivo, medio_pago: "efectivo", venta_id: ventaId, fecha: created_at, descripcion: `Venta #${ventaId} (editada)` });
-    if (nuevaTransferencia > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual?.id, tipo: "venta", monto: nuevaTransferencia, medio_pago: "transferencia", venta_id: ventaId, fecha: created_at, descripcion: `Venta #${ventaId} (editada)` });
-    await sb.from("ventas").update({ monto_efectivo: nuevoEfectivo, monto_transferencia: nuevaTransferencia }).eq("id", ventaId);
-  }
-
-  await registrarHistorial("ventas", ventaId, "editar", `Venta editada, nuevo total ${fmt(total)}`);
+  try {
+    await CG.rpc.editarVenta({
+      venta_id: ventaId,
+      cliente_id: cliente_id || null,
+      created_at,
+      usuario: usuarios[0]?.nombre || "",
+      items: window.__editVentaItems.map((it) => ({
+        id: it.id || null,
+        producto_id: it.producto_id,
+        cantidad: it.cantidad,
+        precio_unitario: it.precio_unitario,
+        descuento: it.descuento || 0,
+        costo_unitario: it.costo_unitario || 0,
+      })),
+    });
+  } catch (e) { alert(e.message); console.error(e); return; }
   closeModal();
   await loadAll();
   if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
@@ -3879,57 +3839,6 @@ async function saveEditCompra() {
   const total = Math.max(0, subtotal - descuento);
   const compraId = window.__editingCompraId;
 
-  // Validar antes de escribir nada: que ningún ajuste deje el stock en negativo
-  for (const it of window.__compraItems) {
-    const original = window.__originalCompraItems.find((o) => o.id === it.id);
-    const delta = it.cantidad - (original?.cantidad || 0);
-    const p = productos.find((pr) => pr.id === it.producto_id);
-    if (p && p.stock + delta * factorConversion(p) < 0) {
-      alert(`Ese cambio dejaría el stock de "${p.nombre}" en negativo.`);
-      return;
-    }
-  }
-  for (const original of window.__originalCompraItems) {
-    const sigueExistiendo = window.__compraItems.some((it) => it.id === original.id);
-    if (!sigueExistiendo) {
-      const p = productos.find((pr) => pr.id === original.producto_id);
-      if (p && p.stock - original.cantidad * factorConversion(p) < 0) {
-        alert(`Quitar "${p.nombre}" de esta compra dejaría su stock en negativo.`);
-        return;
-      }
-    }
-  }
-
-  // Items que ya existían: ajustar el stock por la diferencia y actualizar la fila
-  for (const it of window.__compraItems) {
-    if (it.id) {
-      const original = window.__originalCompraItems.find((o) => o.id === it.id);
-      const delta = it.cantidad - (original?.cantidad || 0);
-      const p = productos.find((pr) => pr.id === it.producto_id);
-      if (p) await sb.from("productos").update({ stock: p.stock + delta * factorConversion(p), costo_ultimo: it.costo_unitario }).eq("id", p.id);
-      await sb.from("compra_items").update({ producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario }).eq("id", it.id);
-    } else {
-      // Línea nueva agregada durante la edición
-      const p = productos.find((pr) => pr.id === it.producto_id);
-      if (p) await sb.from("productos").update({ stock: p.stock + it.cantidad * factorConversion(p), costo_ultimo: it.costo_unitario }).eq("id", p.id);
-      await sb.from("compra_items").insert({ compra_id: compraId, producto_id: it.producto_id, cantidad: it.cantidad, costo_unitario: it.costo_unitario });
-    }
-  }
-
-  // Líneas que existían antes y se quitaron: revertir el stock que habían sumado
-  for (const original of window.__originalCompraItems) {
-    const sigueExistiendo = window.__compraItems.some((it) => it.id === original.id);
-    if (!sigueExistiendo) {
-      const p = productos.find((pr) => pr.id === original.producto_id);
-      if (p) await sb.from("productos").update({ stock: p.stock - original.cantidad * factorConversion(p) }).eq("id", p.id);
-      await sb.from("compra_items").delete().eq("id", original.id);
-    }
-  }
-
-  await sb.from("compras").update({ proveedor_id, tipo, total, descuento, created_at }).eq("id", compraId);
-
-  // Actualizar también el dinero descontado de caja, según el nuevo total
-  await sb.from("caja_movimientos").delete().eq("compra_id", compraId);
   const medioEdit = window.__medioPagoCompra || "efectivo";
   let nuevoEfectivo = 0, nuevaTransferencia = 0;
   if (medioEdit === "mixto") {
@@ -3940,11 +3849,26 @@ async function saveEditCompra() {
   } else {
     nuevaTransferencia = total;
   }
-  if (nuevoEfectivo > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "compra", monto: nuevoEfectivo, medio_pago: "efectivo", compra_id: compraId, descripcion: `Compra #${compraId} (editada)` });
-  if (nuevaTransferencia > 0) await sb.from("caja_movimientos").insert({ caja_id: cajaActual.id, tipo: "compra", monto: nuevaTransferencia, medio_pago: "transferencia", compra_id: compraId, descripcion: `Compra #${compraId} (editada)` });
-  await sb.from("compras").update({ medio_pago: medioEdit, monto_efectivo: nuevoEfectivo, monto_transferencia: nuevaTransferencia }).eq("id", compraId);
-
-  await registrarHistorial("compras", compraId, "editar", `Compra editada, nuevo total ${fmt(total)}`);
+  try {
+    await CG.rpc.editarCompra({
+      compra_id: compraId,
+      proveedor_id,
+      tipo,
+      total,
+      descuento,
+      created_at,
+      medio_pago: medioEdit,
+      monto_efectivo: nuevoEfectivo,
+      monto_transferencia: nuevaTransferencia,
+      usuario: usuarios[0]?.nombre || "",
+      items: window.__compraItems.map((it) => ({
+        id: it.id || null,
+        producto_id: it.producto_id,
+        cantidad: it.cantidad,
+        costo_unitario: it.costo_unitario,
+      })),
+    });
+  } catch (e) { alert(e.message); console.error(e); return; }
 
   window.__editingCompraId = null;
   window.__compraItems = [];
@@ -3962,13 +3886,9 @@ async function deleteCompra() {
   if (procesandoAccion) return;
   procesandoAccion = true;
   try {
-  for (const it of window.__originalCompraItems) {
-    const p = productos.find((pr) => pr.id === it.producto_id);
-    if (p) await sb.from("productos").update({ stock: p.stock - it.cantidad * factorConversion(p) }).eq("id", p.id);
-  }
-  await sb.from("caja_movimientos").delete().eq("compra_id", window.__editingCompraId);
-  await sb.from("compras").delete().eq("id", window.__editingCompraId);
-  await registrarHistorial("compras", window.__editingCompraId, "eliminar", `Compra eliminada`);
+  try {
+    await CG.rpc.eliminarCompra(window.__editingCompraId, usuarios[0]?.nombre || "");
+  } catch (e) { alert(e.message); console.error(e); return; }
 
   window.__editingCompraId = null;
   window.__compraItems = [];
