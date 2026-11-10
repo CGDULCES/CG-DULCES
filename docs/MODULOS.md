@@ -32,9 +32,10 @@ Sin uso hoy (heredadas): `fabricacion`, `fabricacion_insumos`, `gastos`, `pedido
 `01_schema` → `02_security` → `03_rpc` → `04_triggers` → `05_views` → `06_storage`
 (todo junto en `APLICAR-TODO.sql`). Los `NN_ajustes.sql` son parches ya aplicados.
 `13_ajustes.sql` cierra las tablas de plata; `13_ajustes_REVERTIR.sql` lo deshace.
+`18_ajustes.sql`: vistas con permisos de quien consulta y limpieza de políticas duplicadas.
+Función del servidor `supabase/functions/cambiar-acceso` (cambia usuario y contraseña de quien tiene sesión).
 
 ## Pendiente
 
-- Respaldo automático fuera de Supabase (ver `MIGRATION.md`, paso 6): requiere la clave
-  secreta de la función. Mientras tanto, la app avisa si pasan 7 días sin copia manual.
+- Respaldo automático fuera de Supabase (ver `MIGRATION.md`, paso 6): no está activo. Solo existe la copia manual desde Más → Configuración.
 - Partir `index.html` en archivos por módulo (Vite), como fase aparte.
