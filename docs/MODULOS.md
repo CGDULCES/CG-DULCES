@@ -9,7 +9,7 @@ Las ventas cargadas por error se siguen eliminando con "Eliminar venta" (funció
 
 | Módulo | Tablas | Funciones (escritura) |
 |---|---|---|
-| **Ventas** | 🔒 `ventas`, 🔒 `venta_items`, `venta_repartos` | `registrar_venta`, `anular_venta`, `editar_venta`, `cambiar_fecha_venta`, `dividir_cuenta` |
+| **Ventas** | 🔒 `ventas`, 🔒 `venta_items`, `venta_repartos` | `registrar_venta`, `anular_venta`, `editar_venta`, `cambiar_fecha_venta`, `dividir_cuenta`, `registrar_deuda_manual`, `editar_deuda_manual` |
 | **Caja** | 🔒 `caja`, 🔒 `caja_movimientos` | `abrir_caja`, `cerrar_caja`, `registrar_movimiento_caja`, `saldos_caja`, `caja_abierta_id` |
 | **Clientes y créditos** | `clientes`, 🔒 `cobros` | `registrar_cobro`, `anular_cobro`, `editar_cobro` |
 | **Compras** | 🔒 `compras`, 🔒 `compra_items`, `proveedores`, `lotes`, `precio_historial` | `registrar_compra`, `editar_compra`, `eliminar_compra` |

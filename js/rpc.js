@@ -58,6 +58,9 @@
     editarVenta: (payload) => call("editar_venta", { p: payload }),
     cambiarFechaVenta: (ventaId, fecha, usuario) =>
       call("cambiar_fecha_venta", { p_venta_id: ventaId, p_fecha: fecha, p_usuario: usuario || "" }),
+    registrarDeudaManual: (payload) => call("registrar_deuda_manual", { p: payload }),
+    editarDeudaManual: (ventaId, concepto, monto, fecha, usuario) =>
+      call("editar_deuda_manual", { p_venta_id: ventaId, p_concepto: concepto, p_monto: monto, p_fecha: fecha, p_usuario: usuario || "" }),
     editarCompra: (payload) => call("editar_compra", { p: payload }),
     eliminarCompra: (compraId, usuario) =>
       call("eliminar_compra", { p_compra_id: compraId, p_usuario: usuario || "" }),

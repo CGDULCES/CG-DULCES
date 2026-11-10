@@ -222,6 +222,13 @@ function toggleOcultarMontos() {
   }
 }
 
+// Texto de lo que se vendió: productos, o el concepto si es una deuda manual
+function textoVenta(v) {
+  const items = (v.venta_items || []);
+  if (items.length) return items.map((it) => `${it.cantidad}× ${it.productos?.nombre || ""}`).join(", ");
+  return v.concepto ? `📝 ${v.concepto}` : "";
+}
+
 // Supabase devuelve como máximo 1000 filas por consulta; esto trae TODAS por páginas.
 async function selectTodo(tabla, columnas, ajustar) {
   let todo = [];
@@ -355,7 +362,7 @@ async function loadUsuarios() {
 async function loadVentas() {
   const { data, error } = await sb
     .from("ventas")
-    .select("id, total, subtotal, descuento_total, medio_pago, es_fiado, registrado_por, created_at, venta_items(cantidad, precio_unitario, costo_unitario, subtotal, producto_id, productos(nombre, categoria_id))")
+    .select("id, total, subtotal, descuento_total, medio_pago, es_fiado, registrado_por, created_at, concepto, venta_items(cantidad, precio_unitario, costo_unitario, subtotal, producto_id, productos(nombre, categoria_id))")
     .order("created_at", { ascending: false })
     .limit(500);
   if (error) { console.error(error); return; }
@@ -613,7 +620,7 @@ function renderDashboard(content) {
               return `
             <div class="flex items-center justify-between gap-3">
               <div class="min-w-0">
-                <p class="text-[13px] text-[#241C2E] truncate">${(v.venta_items||[]).map(it=>`${it.cantidad}× ${it.productos?.nombre||""}`).join(", ")}</p>
+                <p class="text-[13px] text-[#241C2E] truncate">${CG.escapeHtml(textoVenta(v))}</p>
                 <p class="text-[11px] text-[#8a7d94]">${new Date(v.created_at).toLocaleTimeString("es-PY",{hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})} · ${v.registrado_por || ""}${siguePendiente ? ` · <span class="text-[#D64545] font-semibold">Fiado, pendiente</span>` : v.es_fiado ? ` · <span class="text-[#2F9E7A] font-semibold">Fiado, ya cobrado</span>` : ""}</p>
               </div>
               <span class="font-mono-num text-[13px] font-semibold shrink-0 ${siguePendiente ? "text-[#8a7d94]" : ""}">${fmt(v.total)}</span>
@@ -1397,7 +1404,7 @@ async function abrirClienteDetalle(clienteId) {
   window.__clienteSeleccionadas = new Set();
   window.__clienteSeleccionadasRepartos = new Set();
   const [{ data: ventasCliente }, { data: cobrosCliente }, { data: repartosCliente }] = await Promise.all([
-    sb.from("ventas").select("id, total, es_fiado, medio_pago, created_at, venta_items(cantidad, productos(nombre))").eq("cliente_id", clienteId).order("created_at", { ascending: false }),
+    sb.from("ventas").select("id, total, es_fiado, medio_pago, created_at, concepto, venta_items(cantidad, productos(nombre))").eq("cliente_id", clienteId).order("created_at", { ascending: false }),
     sb.from("cobros").select("*").eq("cliente_id", clienteId).order("created_at", { ascending: false }),
     sb.from("venta_repartos").select("id, venta_id, monto, created_at, ventas(created_at, venta_items(cantidad, productos(nombre)))").eq("cliente_id", clienteId).order("created_at", { ascending: false }),
   ]);
@@ -1445,12 +1452,80 @@ window.__editVentaId = null;
 window.__editVentaItems = [];
 window.__editVentaOriginalItems = [];
 
+// ---------- Deudas manuales (algo que no está en el inventario) ----------
+function openAgregarDeuda(clienteId) {
+  const c = clientes.find((cc) => cc.id === clienteId);
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Agregar deuda</p>
+    <p class="text-[12px] text-[#8a7d94] mb-4">${CG.escapeHtml(c?.nombre || "")} · para algo que no está en el inventario</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">¿Qué le vendiste?</label>
+    <input id="deuda-concepto" type="text" maxlength="120" placeholder="Ej: Porción de torta" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto a cobrar</label>
+    <input id="deuda-monto" type="number" inputmode="numeric" min="1" placeholder="0" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Fecha</label>
+    <input id="deuda-fecha" type="date" value="${fechaLocalHoy()}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
+    <button onclick="saveAgregarDeuda(${clienteId})" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Guardar deuda</button>
+  `);
+}
+async function saveAgregarDeuda(clienteId) {
+  if (procesandoAccion) return;
+  const concepto = document.getElementById("deuda-concepto").value.trim();
+  const monto = Number(document.getElementById("deuda-monto").value) || 0;
+  const fecha = document.getElementById("deuda-fecha").value;
+  if (!concepto) { alert("Escribí qué le vendiste."); return; }
+  if (monto <= 0) { alert("Poné el monto a cobrar."); return; }
+  procesandoAccion = true;
+  try {
+    try {
+      await CG.rpc.registrarDeudaManual({ cliente_id: clienteId, concepto, monto, created_at: fechaOAhora(fecha), registrado_por: usuarios[0]?.nombre || "" });
+    } catch (e) { alert(e.message); console.error(e); return; }
+    closeModal();
+    await loadAll();
+    await abrirClienteDetalle(clienteId);
+  } finally {
+    procesandoAccion = false;
+  }
+}
+function openEditDeuda(venta) {
+  window.__editDeudaId = venta.id;
+  showModal(`
+    <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Editar deuda</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">¿Qué le vendiste?</label>
+    <input id="editdeuda-concepto" type="text" maxlength="120" value="${CG.escapeHtml(venta.concepto || "")}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto</label>
+    <input id="editdeuda-monto" type="number" inputmode="numeric" min="1" value="${Number(venta.total)}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Fecha</label>
+    <input id="editdeuda-fecha" type="date" value="${new Date(venta.created_at).toLocaleDateString("en-CA", { timeZone: "America/Asuncion" })}" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-5 outline-none" />
+    <button onclick="saveEditDeuda()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3">Guardar cambios</button>
+  `);
+}
+async function saveEditDeuda() {
+  if (procesandoAccion) return;
+  const concepto = document.getElementById("editdeuda-concepto").value.trim();
+  const monto = Number(document.getElementById("editdeuda-monto").value) || 0;
+  const fecha = document.getElementById("editdeuda-fecha").value;
+  if (!concepto) { alert("Escribí qué le vendiste."); return; }
+  if (monto <= 0) { alert("Poné el monto."); return; }
+  procesandoAccion = true;
+  try {
+    try {
+      await CG.rpc.editarDeudaManual(window.__editDeudaId, concepto, monto, fechaOAhora(fecha), usuarios[0]?.nombre || "");
+    } catch (e) { alert(e.message); console.error(e); return; }
+    closeModal();
+    await loadAll();
+    if (window.__clienteDetalleId) await abrirClienteDetalle(window.__clienteDetalleId);
+  } finally {
+    procesandoAccion = false;
+  }
+}
+
 async function openEditVenta(ventaId) {
   const { data: venta } = await sb
     .from("ventas")
-    .select("id, cliente_id, es_fiado, medio_pago, monto_efectivo, monto_transferencia, created_at, venta_items(id, producto_id, cantidad, precio_unitario, costo_unitario, descuento, productos(nombre))")
+    .select("id, cliente_id, es_fiado, medio_pago, monto_efectivo, monto_transferencia, created_at, concepto, total, venta_items(id, producto_id, cantidad, precio_unitario, costo_unitario, descuento, productos(nombre))")
     .eq("id", ventaId).single();
   if (!venta) return;
+  if (venta.concepto) { openEditDeuda(venta); return; }
 
   const tieneHelado = (venta.venta_items || []).some((it) => PRODUCTOS_HELADO_SIN_STOCK_DIRECTO.includes(it.productos?.nombre));
   if (tieneHelado) {
@@ -1669,6 +1744,7 @@ function renderClienteDetalle(content) {
       <div class="flex items-center justify-between">
         <p class="font-display text-[18px] font-semibold text-[#241C2E]">${CG.escapeHtml(cliente.nombre)}</p>
         <div class="flex items-center gap-3">
+          <button onclick="openAgregarDeuda(${cliente.id})" class="text-[11px] text-[#2F9E7A] font-semibold">Agregar deuda</button>
           <button onclick="openEditCliente(${cliente.id})" class="text-[11px] text-[#6B2D5C] font-semibold">Editar</button>
           <button onclick="deleteCliente(${cliente.id})" class="text-[11px] text-[#D64545] font-semibold">Eliminar</button>
         </div>
@@ -1692,7 +1768,7 @@ function renderClienteDetalle(content) {
           const pagado = pagadoDeVenta(v.id);
           const pendiente = v.es_fiado ? Math.max(0, v.total - pagado) : 0;
           const fechaHora = new Date(v.created_at).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Asuncion" });
-          const itemsTexto = (v.venta_items || []).map((it) => `${it.cantidad}× ${it.productos?.nombre || ""}`).join(", ");
+          const itemsTexto = CG.escapeHtml(textoVenta(v));
           const seleccionable = v.es_fiado && pendiente > 0;
           return `
           <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
@@ -2096,8 +2172,9 @@ async function saveCobroSeleccionadas() {
   const sobrante = redondeo > 0 ? Math.ceil(suma / redondeo) * redondeo - suma : 0;
 
   try {
+    const grupo = crypto.randomUUID();
     for (const c of cobros) {
-      await CG.rpc.registrarCobro({ cliente_id: clienteId, venta_id: c.venta_id, monto: c.monto, medio_pago, registrado_por, cliente_nombre: cliente?.nombre });
+      await CG.rpc.registrarCobro({ cliente_id: clienteId, venta_id: c.venta_id, monto: c.monto, medio_pago, registrado_por, cliente_nombre: cliente?.nombre, grupo });
     }
     if (sobrante > 0) {
       await CG.rpc.movimientoCaja({
@@ -2220,7 +2297,7 @@ async function cobrarConSobrante({ cliente_id, venta_id, montoPagado, pendiente,
   const cobroReal = (pendiente != null && montoPagado > pendiente) ? pendiente : montoPagado;
   const sobrante = (pendiente != null) ? Math.max(0, montoPagado - pendiente) : 0;
   if (cobroReal > 0) {
-    await CG.rpc.registrarCobro({ cliente_id, venta_id, monto: cobroReal, medio_pago, registrado_por, cliente_nombre });
+    await CG.rpc.registrarCobro({ cliente_id, venta_id, monto: cobroReal, medio_pago, registrado_por, cliente_nombre, grupo: crypto.randomUUID() });
   }
   if (sobrante > 0) {
     try {
@@ -3031,7 +3108,7 @@ let buscarTodasVentas = "";
 async function abrirTodasVentas() {
   const { data } = await sb
     .from("ventas")
-    .select("id, total, es_fiado, medio_pago, registrado_por, created_at, clientes(nombre), venta_items(cantidad, productos(nombre)), venta_repartos(id, cliente_id, monto, clientes(nombre))")
+    .select("id, total, es_fiado, medio_pago, registrado_por, created_at, concepto, clientes(nombre), venta_items(cantidad, productos(nombre)), venta_repartos(id, cliente_id, monto, clientes(nombre))")
     .order("created_at", { ascending: false })
     .limit(500);
   window.__todasVentas = data || [];
@@ -3052,7 +3129,7 @@ function renderTodasVentas(content) {
     if (!termino) return true;
     const clienteNombre = v.clientes?.nombre?.toLowerCase() || "";
     const participantesTexto = (v.venta_repartos || []).map((r) => r.clientes?.nombre?.toLowerCase() || "").join(" ");
-    const itemsTexto = (v.venta_items || []).map((it) => it.productos?.nombre?.toLowerCase() || "").join(" ");
+    const itemsTexto = (v.venta_items || []).map((it) => it.productos?.nombre?.toLowerCase() || "").join(" ") + " " + (v.concepto || "").toLowerCase();
     return clienteNombre.includes(termino) || participantesTexto.includes(termino) || itemsTexto.includes(termino);
   });
 
@@ -3067,7 +3144,7 @@ function renderTodasVentas(content) {
       ${filtradas.length === 0 ? `<p class="text-[13px] text-[#8a7d94]">No encontré ventas con ese criterio.</p>` :
         filtradas.map((v) => {
           const fechaHora = new Date(v.created_at).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Asuncion" });
-          const itemsTexto = (v.venta_items || []).map((it) => `${it.cantidad}× ${it.productos?.nombre || ""}`).join(", ");
+          const itemsTexto = CG.escapeHtml(textoVenta(v));
           const esDividida = (v.venta_repartos || []).length > 0;
           const participantes = esDividida ? v.venta_repartos.map((r) => r.clientes?.nombre || "").join(", ") : "";
           const pagadoDeEsta = cobros.filter((c) => c.venta_id === v.id).reduce((s, c) => s + Number(c.monto), 0);
@@ -3137,12 +3214,36 @@ async function renderCaja(content) {
 
   // Armamos una sola línea de tiempo: apertura de la primera caja, todos sus movimientos,
   // y por cada caja siguiente marcamos dónde se reabrió (debería coincidir con el cierre anterior).
+  const cobrosPorId = Object.fromEntries((cobros || []).map((c) => [c.id, c]));
+  window.__cajaGrupos = [];
   let bloques = [];
   bloques.push({ tipo: "apertura", fecha: primeraCaja.fecha_apertura, efectivo: primeraCaja.apertura_efectivo, banco: primeraCaja.apertura_banco });
 
   todasLasCajas.forEach((caja, i) => {
     const movsDeEstaCaja = (todosLosMovs || []).filter((m) => m.caja_id === caja.id).sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
-    movsDeEstaCaja.forEach((m) => bloques.push({ tipo: "mov", data: m }));
+    // Los cobros hechos en una misma operación se juntan en UNA fila con el total
+    const gruposDeCobro = {};
+    movsDeEstaCaja.forEach((m) => {
+      if (m.tipo !== "cobro") { bloques.push({ tipo: "mov", data: m }); return; }
+      const c = cobrosPorId[m.cobro_id];
+      const ms = new Date(m.fecha).getTime();
+      let g = c?.grupo ? gruposDeCobro[c.grupo] : null;
+      if (!g && !c?.grupo && c) {
+        // cobros viejos (sin grupo): mismo cliente y medio, uno detrás del otro (≤ 3 s)
+        const prev = bloques[bloques.length - 1];
+        if (prev && prev.tipo === "cobro_grupo" && !prev.grupo && prev.cliente_id === c.cliente_id && prev.medio === m.medio_pago && ms - prev.ultimoMs <= 3000) g = prev;
+      }
+      if (!g) {
+        g = { tipo: "cobro_grupo", grupo: c?.grupo || null, cliente_id: c?.cliente_id ?? null, medio: m.medio_pago, movs: [], monto: 0, fecha: m.fecha, ultimoMs: ms, partes: [] };
+        bloques.push(g);
+        if (c?.grupo) gruposDeCobro[c.grupo] = g;
+      }
+      g.movs.push(m);
+      g.monto += Number(m.monto);
+      g.fecha = m.fecha;
+      g.ultimoMs = ms;
+      g.partes.push({ venta_id: m.venta_id, monto: Number(m.monto), descripcion: m.descripcion });
+    });
     if (caja.estado === "cerrada") {
       bloques.push({ tipo: "cierre", fecha: caja.fecha_cierre, efectivo: caja.cierre_efectivo, banco: caja.cierre_banco });
       const siguiente = todasLasCajas[i + 1];
@@ -3163,6 +3264,11 @@ async function renderCaja(content) {
       if (esBanco) corridaBanco += signo * monto; else corridaEfectivo += signo * monto;
       return { ...b, signo, esBanco, saldoEfectivo: corridaEfectivo, saldoBanco: corridaBanco };
     }
+    if (b.tipo === "cobro_grupo") {
+      const esBanco = esMedioBanco(b.medio);
+      if (esBanco) corridaBanco += b.monto; else corridaEfectivo += b.monto;
+      return { ...b, esBanco, saldoEfectivo: corridaEfectivo, saldoBanco: corridaBanco };
+    }
     return b;
   });
 
@@ -3176,6 +3282,23 @@ async function renderCaja(content) {
     }
     if (b.tipo === "reapertura") {
       return `<div class="${b.coincide ? 'bg-[#2F9E7A]/10' : 'bg-[#D64545]/10'} rounded-xl p-3 text-[12px] text-[#241C2E]"><strong>${b.coincide ? "✓" : "⚠"} Nueva caja abierta</strong> · ${new Date(b.fecha).toLocaleDateString("es-PY")} — con Efectivo ${fmt(b.efectivo||0)}, Banco ${fmt(b.banco||0)}${!b.coincide ? " (no coincide con el cierre anterior)" : ""}</div>`;
+    }
+    if (b.tipo === "cobro_grupo") {
+      const idx = window.__cajaGrupos.push(b) - 1;
+      const cli = clientes.find((c) => c.id === b.cliente_id);
+      const nVentas = new Set(b.partes.map((p) => p.venta_id).filter(Boolean)).size;
+      return `
+      <div class="bg-white rounded-xl shadow-sm border border-black/[0.04] overflow-hidden">
+        <button type="button" onclick="toggleCobroGrupo(${idx})" class="w-full text-left p-3">
+          <div class="flex items-center justify-between">
+            <span class="text-[12px] font-semibold text-[#241C2E]">Cobro${cli ? " · " + CG.escapeHtml(cli.nombre) : ""} · ${b.esBanco ? "Banco" : "Efectivo"}</span>
+            <span class="font-mono-num text-[12px] font-semibold text-[#2F9E7A]">+${fmt(b.monto)}</span>
+          </div>
+          <p class="text-[10px] text-[#8a7d94]">${new Date(b.fecha).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}${nVentas > 0 ? ` · ${nVentas} venta${nVentas>1?"s":""}` : ""} · <span id="cg-flecha-${idx}" class="text-[#6B2D5C] font-semibold">Ver detalle ▾</span></p>
+          <p class="text-[9px] text-[#8a7d94] mt-0.5">Saldo después: efectivo ${fmt(b.saldoEfectivo)} · banco ${fmt(b.saldoBanco)}</p>
+        </button>
+        <div id="cg-detalle-${idx}" class="hidden px-3 pb-3"></div>
+      </div>`;
     }
     const m = b.data;
     const monto = Number(m.monto);
@@ -3194,6 +3317,65 @@ async function renderCaja(content) {
     ${sectionLabel(`Movimientos de caja (${todasLasCajas.length} caja${todasLasCajas.length>1?'s':''} en total)`)}
     <div class="space-y-2">${filasHtml}</div>
   `;
+}
+
+// Despliega/pliega el detalle de un cobro en la Caja (una tarjeta por cada venta que se pagó)
+async function toggleCobroGrupo(idx) {
+  const cuerpo = document.getElementById(`cg-detalle-${idx}`);
+  const flecha = document.getElementById(`cg-flecha-${idx}`);
+  const g = window.__cajaGrupos?.[idx];
+  if (!cuerpo || !g) return;
+  const abrir = cuerpo.classList.contains("hidden");
+  cuerpo.classList.toggle("hidden", !abrir);
+  if (flecha) flecha.textContent = abrir ? "Ocultar ▴" : "Ver detalle ▾";
+  if (!abrir || g.htmlDetalle) { if (abrir && g.htmlDetalle) cuerpo.innerHTML = g.htmlDetalle; return; }
+
+  cuerpo.innerHTML = `<p class="text-[11px] text-[#8a7d94]">Cargando detalle...</p>`;
+  // lo cobrado por cada venta dentro de este cobro
+  const porVenta = new Map();
+  g.partes.forEach((p) => { if (p.venta_id) porVenta.set(p.venta_id, (porVenta.get(p.venta_id) || 0) + p.monto); });
+  const cli = clientes.find((c) => c.id === g.cliente_id);
+  const fmtFecha = (f) => new Date(f).toLocaleString("es-PY", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/Asuncion" });
+  let tarjetas = "";
+
+  if (porVenta.size === 0) {
+    tarjetas = `<div class="bg-[#F7F3FA] rounded-lg p-3 text-[12px] text-[#241C2E]">Pago a cuenta de la deuda general${cli ? " de <strong>" + CG.escapeHtml(cli.nombre) + "</strong>" : ""}. No está asociado a una venta puntual.</div>`;
+  } else {
+    const { data: ventasDet, error } = await sb
+      .from("ventas")
+      .select("id, total, created_at, registrado_por, concepto, clientes(nombre), venta_items(cantidad, precio_unitario, subtotal, productos(nombre, presentacion)), venta_repartos(cliente_id, monto)")
+      .in("id", [...porVenta.keys()]);
+    if (error) { console.error(error); cuerpo.innerHTML = `<p class="text-[11px] text-[#D64545]">No se pudo cargar el detalle.</p>`; return; }
+    const mapa = new Map((ventasDet || []).map((v) => [v.id, v]));
+    tarjetas = [...porVenta.entries()].map(([vid, pagado]) => {
+      const v = mapa.get(vid);
+      if (!v) return `<div class="bg-[#F7F3FA] rounded-lg p-3 text-[12px] text-[#8a7d94]">Venta #${vid} (ya no existe) · cobrado ${fmt(pagado)}</div>`;
+      const reparto = (v.venta_repartos || []).find((r) => r.cliente_id === g.cliente_id);
+      const totalReferencia = reparto ? Number(reparto.monto) : Number(v.total);
+      const filas = (v.venta_items || []).length
+        ? v.venta_items.map((it) => `
+            <div class="flex items-start justify-between gap-2 py-1 border-t border-black/[0.05] first:border-t-0">
+              <span class="text-[12px] text-[#241C2E] min-w-0">${CG.escapeHtml(it.productos?.nombre || "")}${it.productos?.presentacion ? " · " + CG.escapeHtml(it.productos.presentacion) : ""} <span class="text-[#8a7d94]">× ${it.cantidad}</span></span>
+              <span class="font-mono-num text-[12px] shrink-0">${fmt(it.subtotal)}</span>
+            </div>`).join("")
+        : `<div class="py-1 text-[12px] text-[#241C2E]">📝 ${CG.escapeHtml(v.concepto || "Deuda manual")}</div>`;
+      return `
+        <div class="bg-[#F7F3FA] rounded-lg p-3">
+          <div class="flex items-center justify-between">
+            <span class="text-[12px] font-semibold text-[#241C2E]">Venta #${v.id}</span>
+            <span class="text-[10px] text-[#8a7d94]">${fmtFecha(v.created_at)}</span>
+          </div>
+          <p class="text-[10px] text-[#8a7d94] mb-1">${v.clientes?.nombre ? "Cliente: " + CG.escapeHtml(v.clientes.nombre) + " · " : ""}Vendedor: ${CG.escapeHtml(v.registrado_por || "—")}</p>
+          <div class="mb-1">${filas}</div>
+          <div class="flex items-center justify-between pt-1.5 border-t border-black/[0.08]">
+            <span class="text-[11px] text-[#8a7d94]">${reparto ? "Su parte de la cuenta" : "Total de la venta"} ${fmt(totalReferencia)}</span>
+            <span class="font-mono-num text-[12px] font-semibold text-[#2F9E7A]">Cobrado ${fmt(pagado)}</span>
+          </div>
+        </div>`;
+    }).join("");
+  }
+  g.htmlDetalle = `<div class="space-y-2">${tarjetas}</div>`;
+  cuerpo.innerHTML = g.htmlDetalle;
 }
 
 // ---------- Pérdidas (roturas, vencidos, dañados) ----------
