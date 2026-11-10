@@ -58,13 +58,20 @@
   .stock-fill { transition: width .4s ease; }
   .modal-overlay { background: rgb(var(--cg-ink) / 0.55); }
   .screen-hidden { display: none !important; }
-  html, body { touch-action: manipulation; }
+  html, body { touch-action: manipulation; height: 100%; }
+  /* La app ocupa justo el alto de la pantalla: no se mueve todo, solo se desliza el contenido */
+  body { height: 100vh; height: 100dvh; overflow: hidden; overscroll-behavior: none; }
+  #content { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; min-height: 0; }
+  #modal-box { overscroll-behavior: contain; }
+  /* Encabezado fijo de cada pantalla (Volver + título) */
+  .cg-fijo { position: sticky; top: -1.25rem; z-index: 20; background: rgb(var(--cg-surface)); margin: -1.25rem -1.25rem 0.75rem; padding: 1.25rem 1.25rem 0.5rem; }
+  .cg-fijo > :last-child { margin-bottom: 0; }
 </style>
 </head>
-<body class="min-h-screen w-full flex items-start justify-center p-0 sm:p-4">
+<body class="w-full flex items-center justify-center p-0 sm:p-4">
 
 <!-- Pantalla de login -->
-<div id="login-screen" class="relative w-full max-w-[460px] md:max-w-none lg:max-w-[1100px] sm:h-[860px] md:h-[90vh] sm:rounded-[2.25rem] sm:shadow-2xl sm:border sm:border-cg-line/5 bg-cg-surface overflow-hidden flex flex-col min-h-screen">
+<div id="login-screen" class="relative w-full max-w-[460px] md:max-w-none lg:max-w-[1100px] h-full sm:max-h-[860px] md:max-h-none sm:rounded-[2.25rem] sm:shadow-2xl sm:border sm:border-cg-line/5 bg-cg-surface overflow-hidden flex flex-col">
   <div class="flex-1 flex flex-col items-center justify-center px-8">
     <img id="login-logo" src="assets/logo.png" alt="CG Dulces" class="w-[200px] h-auto mb-2" />
     <p class="text-[13px] text-cg-muted mb-8">Ingresá para ver el panel del negocio</p>
@@ -82,7 +89,7 @@
 </div>
 
 <!-- App -->
-<div id="app-screen" class="screen-hidden relative w-full max-w-[460px] md:max-w-none lg:max-w-[1100px] sm:h-[860px] md:h-[90vh] sm:rounded-[2.25rem] sm:shadow-2xl sm:border sm:border-cg-line/5 bg-cg-surface overflow-hidden flex flex-col min-h-screen">
+<div id="app-screen" class="screen-hidden relative w-full max-w-[460px] md:max-w-none lg:max-w-[1100px] h-full sm:max-h-[860px] md:max-h-none sm:rounded-[2.25rem] sm:shadow-2xl sm:border sm:border-cg-line/5 bg-cg-surface overflow-hidden flex flex-col">
 
   <!-- Encabezado -->
   <div class="px-6 pt-6 pb-4 bg-cg-primary text-cg-onink shrink-0">
@@ -630,6 +637,22 @@ function agruparPorCategoria(lista) {
 function sectionLabel(text) {
   return `<p class="text-[11px] font-semibold uppercase tracking-[0.14em] text-cg-muted mb-2">${text}</p>`;
 }
+
+// ---------- Encabezado fijo ----------
+// Si la pantalla arranca con "‹ Volver" (y su título), se deja fijo arriba y solo se desliza el resto.
+function fijarEncabezado() {
+  const c = document.getElementById("content");
+  const primero = c?.firstElementChild;
+  if (!primero || primero.classList.contains("cg-fijo")) return;
+  if (primero.tagName !== "BUTTON" || !/^s*‹/.test(primero.textContent)) return;
+  const titulo = primero.nextElementSibling;
+  const envoltorio = document.createElement("div");
+  envoltorio.className = "cg-fijo";
+  c.insertBefore(envoltorio, primero);
+  envoltorio.appendChild(primero);
+  if (titulo && titulo.tagName === "P" && /uppercase/.test(titulo.className)) envoltorio.appendChild(titulo);
+}
+new MutationObserver(() => fijarEncabezado()).observe(document.getElementById("content"), { childList: true });
 
 // ---------- Render principal ----------
 function render() {
