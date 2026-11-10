@@ -3172,8 +3172,6 @@ async function renderCaja(content) {
     }
     return b;
   });
-  const efectivoFinal = corridaEfectivo;
-  const bancoFinal = corridaBanco;
 
   // ...y ahora mostramos la lista con los movimientos más recientes arriba
   const filasHtml = [...bloquesConSaldo].reverse().map((b) => {
@@ -3196,22 +3194,11 @@ async function renderCaja(content) {
           <span class="font-mono-num text-[12px] font-semibold ${b.signo>0?'text-[#2F9E7A]':'text-[#D64545]'}">${b.signo>0?"+":"−"}${fmt(monto)}</span>
         </div>
         <p class="text-[10px] text-[#8a7d94]">${new Date(m.fecha).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}${m.descripcion ? " · " + m.descripcion : ""}</p>
-        <p class="text-[9px] text-[#8a7d94] mt-0.5">Saldo después: efectivo ${montoCaja(b.saldoEfectivo)} · banco ${montoCaja(b.saldoBanco)}</p>
+        <p class="text-[9px] text-[#8a7d94] mt-0.5">Saldo después: efectivo ${fmt(b.saldoEfectivo)} · banco ${fmt(b.saldoBanco)}</p>
       </div>`;
   }).join("");
 
   content.innerHTML = renderEstadoCaja() + `
-    <div class="grid grid-cols-2 gap-3 mb-3">
-      <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
-        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Efectivo (según todo el historial)</p>
-        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${montoCaja(efectivoFinal)}</p>
-      </div>
-      <div class="bg-white rounded-2xl p-4 shadow-sm border border-black/[0.04]">
-        <p class="text-[11px] text-[#8a7d94] font-medium mb-1">Banco (según todo el historial)</p>
-        <p class="font-mono-num text-[17px] font-semibold text-[#241C2E]">${montoCaja(bancoFinal)}</p>
-      </div>
-    </div>
-
     ${cajaActual ? `
     <button onclick="compartirCierreActual()" class="w-full bg-white border border-black/[0.06] rounded-xl px-4 py-2.5 mb-4 flex items-center justify-center gap-2">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="#25D366"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91S17.5 2 12.04 2zm5.8 14.16c-.24.68-1.19 1.25-1.95 1.41-.52.11-1.2.2-3.48-.75-2.92-1.21-4.8-4.17-4.94-4.36-.14-.19-1.18-1.57-1.18-3 0-1.43.75-2.13 1.02-2.42.27-.29.58-.36.78-.36.19 0 .39 0 .56.01.18.01.42-.07.65.5.24.58.82 2 .89 2.15.07.15.11.32.02.51-.09.19-.14.31-.27.48-.14.17-.29.37-.41.5-.14.14-.28.29-.12.57.16.28.71 1.18 1.53 1.91 1.05.94 1.94 1.23 2.22 1.37.28.14.44.12.6-.07.16-.19.68-.79.87-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.32.06.11.06.66-.18 1.34z"/></svg>
