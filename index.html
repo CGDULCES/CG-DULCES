@@ -222,6 +222,16 @@ function toggleOcultarMontos() {
   }
 }
 
+// Identificador para juntar los cobros de una misma operación (UUID v4, con respaldo para celulares viejos)
+function nuevoGrupoId() {
+  try { if (crypto.randomUUID) return crypto.randomUUID(); } catch {}
+  const b = new Uint8Array(16);
+  (crypto.getRandomValues ? crypto.getRandomValues(b) : b.forEach((_, i) => (b[i] = Math.floor(Math.random() * 256))));
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+
 // Texto de lo que se vendió: productos, o el concepto si es una deuda manual
 function textoVenta(v) {
   const items = (v.venta_items || []);
@@ -2111,12 +2121,73 @@ async function saveCobroVenta(ventaId) {
   }
 }
 
+// Deudas elegidas (ventas fiadas + partes de cuentas compartidas), de la más vieja a la más nueva
+function deudasSeleccionadas() {
+  const ventas = window.__clienteDetalleVentas || [];
+  const repartos = window.__clienteDetalleRepartos || [];
+  const lista = [];
+  window.__clienteSeleccionadas.forEach((ventaId) => {
+    const v = ventas.find((vv) => vv.id === ventaId);
+    if (!v) return;
+    const pendiente = Math.max(0, Number(v.total) - pagadoDeVenta(ventaId));
+    if (pendiente > 0) lista.push({ venta_id: ventaId, pendiente, fecha: v.created_at, etiqueta: textoVenta(v) });
+  });
+  window.__clienteSeleccionadasRepartos.forEach((ventaId) => {
+    const r = repartos.find((rr) => rr.venta_id === ventaId);
+    if (!r) return;
+    const pendiente = Math.max(0, Number(r.monto) - pagadoDeReparto(ventaId));
+    if (pendiente > 0) lista.push({ venta_id: ventaId, pendiente, fecha: r.created_at, etiqueta: "Parte de: " + textoVenta(r.ventas || {}) });
+  });
+  return lista.sort((a, b) => new Date(a.fecha) - new Date(b.fecha));
+}
+
+// Reparte un monto entre las deudas elegidas:
+//  1) si el monto alcanza para todas, las salda y lo que sobra es redondeo;
+//  2) si hay una deuda (o 2 o 3 juntas) que suman EXACTO el monto, paga esas completas;
+//  3) si no, paga completas las más viejas y la última queda con pago parcial
+//     (queda pendiente solo lo que falta).
+function repartirCobro(deudas, monto) {
+  const suma = deudas.reduce((s, d) => s + d.pendiente, 0);
+  const completa = (d) => ({ ...d, cobra: d.pendiente, completa: true });
+  if (monto >= suma) return { pagos: deudas.map(completa), sobrante: monto - suma, modo: "todo" };
+
+  const n = deudas.length;
+  let exacto = null;
+  for (let i = 0; i < n && !exacto; i++) if (deudas[i].pendiente === monto) exacto = [i];
+  for (let i = 0; i < n && !exacto; i++)
+    for (let j = i + 1; j < n && !exacto; j++) if (deudas[i].pendiente + deudas[j].pendiente === monto) exacto = [i, j];
+  if (!exacto && n <= 40) {
+    for (let i = 0; i < n && !exacto; i++)
+      for (let j = i + 1; j < n && !exacto; j++)
+        for (let k = j + 1; k < n && !exacto; k++) if (deudas[i].pendiente + deudas[j].pendiente + deudas[k].pendiente === monto) exacto = [i, j, k];
+  }
+  if (exacto) return { pagos: exacto.map((i) => completa(deudas[i])), sobrante: 0, modo: "exacto" };
+
+  let restante = monto;
+  const pagos = [];
+  for (const d of deudas) {
+    if (restante <= 0) break;
+    const cobra = Math.min(d.pendiente, restante);
+    pagos.push({ ...d, cobra, completa: cobra === d.pendiente });
+    restante -= cobra;
+  }
+  return { pagos, sobrante: 0, modo: "parcial" };
+}
+
 function openCobroSeleccionadas() {
   if (!cajaRequerida()) return;
-  const suma = totalCobroSeleccionado();
+  const deudas = deudasSeleccionadas();
+  const suma = deudas.reduce((s, d) => s + d.pendiente, 0);
+  window.__cobroSelSuma = suma;
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-1">Cobrar deudas seleccionadas</p>
-    <p class="text-[12px] text-[#8a7d94] mb-4">Total pendiente: ${fmt(suma)}</p>
+    <p class="text-[12px] text-[#8a7d94] mb-4">${deudas.length} deuda(s) · Total pendiente: ${fmt(suma)}</p>
+    <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Monto a cobrar</label>
+    <input id="cobrosel-monto" type="number" inputmode="numeric" min="1" value="${suma}" oninput="pintarPlanCobroSel()" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 outline-none" />
+    <div class="flex gap-2 mt-2 mb-3">
+      <button type="button" onclick="setMontoCobroSel(${suma})" class="text-[11px] text-[#6B2D5C] font-semibold bg-[#F7F3FA] rounded-lg px-2.5 py-1.5">Todo</button>
+      <button type="button" onclick="setMontoCobroSel(${Math.round(suma / 2)})" class="text-[11px] text-[#6B2D5C] font-semibold bg-[#F7F3FA] rounded-lg px-2.5 py-1.5">La mitad</button>
+    </div>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Forma de pago</label>
     <select id="cobrosel-medio" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">
       <option value="efectivo">Efectivo</option>
@@ -2124,68 +2195,84 @@ function openCobroSeleccionadas() {
       <option value="qr">QR</option>
     </select>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Redondear el total a</label>
-    <select id="cobrosel-redondeo" onchange="pintarTotalCobroSel(${suma})" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-2 outline-none">
-      <option value="0">Sin redondear (${fmt(suma)})</option>
+    <select id="cobrosel-redondeo" onchange="aplicarRedondeoCobroSel()" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none">
+      <option value="0">Sin redondear</option>
       <option value="100">A los 100 (hacia arriba)</option>
       <option value="500">A los 500 (hacia arriba)</option>
       <option value="1000">A los 1.000 (hacia arriba)</option>
     </select>
-    <p id="cobrosel-total" class="text-[12px] text-[#8a7d94] mb-5"></p>
+    <div id="cobrosel-plan" class="bg-[#F7F3FA] rounded-xl p-3 mb-4 max-h-[200px] overflow-y-auto text-[12px]"></div>
     <button onclick="saveCobroSeleccionadas()" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Confirmar cobro</button>
   `);
-  pintarTotalCobroSel(suma);
+  pintarPlanCobroSel();
 }
 
-function pintarTotalCobroSel(suma) {
-  const red = Number(document.getElementById("cobrosel-redondeo")?.value || 0);
-  const el = document.getElementById("cobrosel-total");
+function setMontoCobroSel(monto) {
+  document.getElementById("cobrosel-monto").value = monto;
+  document.getElementById("cobrosel-redondeo").value = "0";
+  pintarPlanCobroSel();
+}
+
+function aplicarRedondeoCobroSel() {
+  const red = Number(document.getElementById("cobrosel-redondeo").value || 0);
+  if (red > 0) document.getElementById("cobrosel-monto").value = Math.ceil(window.__cobroSelSuma / red) * red;
+  else document.getElementById("cobrosel-monto").value = window.__cobroSelSuma;
+  pintarPlanCobroSel();
+}
+
+// Muestra qué se va a cobrar con el monto escrito, antes de confirmar
+function pintarPlanCobroSel() {
+  const el = document.getElementById("cobrosel-plan");
   if (!el) return;
-  if (red <= 0) { el.textContent = ""; return; }
-  const objetivo = Math.ceil(suma / red) * red;
-  const sobra = objetivo - suma;
-  el.textContent = sobra > 0
-    ? `Cobra ${fmt(objetivo)} — salda las deudas y ${fmt(sobra)} van a la caja como ingreso extra (redondeo).`
-    : `Cobra ${fmt(objetivo)} (ya es redondo).`;
+  const monto = Number(document.getElementById("cobrosel-monto").value) || 0;
+  if (monto <= 0) { el.innerHTML = `<span class="text-[#8a7d94]">Escribí el monto a cobrar.</span>`; return; }
+  const deudas = deudasSeleccionadas();
+  const plan = repartirCobro(deudas, monto);
+  const fechaCorta = (f) => new Date(f).toLocaleDateString("es-PY", { day: "2-digit", month: "2-digit", timeZone: "America/Asuncion" });
+  const filas = plan.pagos.map((p) => `
+    <div class="flex items-start justify-between gap-2 py-1 border-t border-black/[0.05] first:border-t-0">
+      <span class="min-w-0 text-[#241C2E]"><span class="${p.completa ? "text-[#2F9E7A]" : "text-[#F2994A]"} font-semibold">${p.completa ? "✓ Se salda" : "◐ Pago parcial"}</span> · ${fechaCorta(p.fecha)} · ${CG.escapeHtml(p.etiqueta)}${p.completa ? "" : `<br><span class="text-[#8a7d94]">paga ${fmt(p.cobra)} · queda pendiente ${fmt(p.pendiente - p.cobra)}</span>`}</span>
+      <span class="font-mono-num font-semibold shrink-0">${fmt(p.cobra)}</span>
+    </div>`).join("");
+  const sinTocar = deudas.length - plan.pagos.length;
+  const titulo = plan.modo === "exacto" ? "Encontré deudas que suman justo ese monto" : plan.modo === "parcial" ? "Se paga de la más vieja a la más nueva" : "Se saldan todas las deudas elegidas";
+  el.innerHTML = `
+    <p class="text-[11px] font-semibold text-[#6B2D5C] mb-1">${titulo}</p>
+    ${filas}
+    ${sinTocar > 0 ? `<p class="text-[#8a7d94] pt-1 border-t border-black/[0.05]">${sinTocar} deuda(s) quedan pendientes sin tocar.</p>` : ""}
+    ${plan.sobrante > 0 ? `<p class="text-[#8a7d94] pt-1 border-t border-black/[0.05]">${fmt(plan.sobrante)} van a la caja como ingreso extra (redondeo).</p>` : ""}`;
 }
 
 async function saveCobroSeleccionadas() {
   if (procesandoAccion) return;
+  const monto = Number(document.getElementById("cobrosel-monto")?.value) || 0;
+  if (monto <= 0) { alert("Escribí el monto a cobrar."); return; }
   procesandoAccion = true;
   try {
-  const medio_pago = document.getElementById("cobrosel-medio").value;
-  const redondeo = Number(document.getElementById("cobrosel-redondeo")?.value || 0);
-  const registrado_por = usuarios[0]?.nombre || "";
-  const clienteId = window.__clienteDetalleId;
-  const cliente = clientes.find((c) => c.id === clienteId);
+    const medio_pago = document.getElementById("cobrosel-medio").value;
+    const registrado_por = usuarios[0]?.nombre || "";
+    const clienteId = window.__clienteDetalleId;
+    const cliente = clientes.find((c) => c.id === clienteId);
 
-  const cobros = [];
-  window.__clienteSeleccionadas.forEach((ventaId) => {
-    const v = window.__clienteDetalleVentas.find((vv) => vv.id === ventaId);
-    if (v) { const m = Math.max(0, v.total - pagadoDeVenta(ventaId)); if (m > 0) cobros.push({ venta_id: ventaId, monto: m }); }
-  });
-  window.__clienteSeleccionadasRepartos.forEach((ventaId) => {
-    const r = window.__clienteDetalleRepartos.find((rr) => rr.venta_id === ventaId);
-    if (r) { const m = Math.max(0, r.monto - pagadoDeReparto(ventaId)); if (m > 0) cobros.push({ venta_id: ventaId, monto: m }); }
-  });
-  if (cobros.length === 0) { closeModal(); return; }
-  const suma = cobros.reduce((s, c) => s + c.monto, 0);
-  const sobrante = redondeo > 0 ? Math.ceil(suma / redondeo) * redondeo - suma : 0;
+    const deudas = deudasSeleccionadas();
+    if (deudas.length === 0) { closeModal(); return; }
+    const plan = repartirCobro(deudas, monto);
 
-  try {
-    const grupo = crypto.randomUUID();
-    for (const c of cobros) {
-      await CG.rpc.registrarCobro({ cliente_id: clienteId, venta_id: c.venta_id, monto: c.monto, medio_pago, registrado_por, cliente_nombre: cliente?.nombre, grupo });
-    }
-    if (sobrante > 0) {
-      await CG.rpc.movimientoCaja({
-        tipo: "ingreso_extra", monto: sobrante, medio_pago, registrado_por,
-        descripcion: `Redondeo de cobro (${cobros.length} deudas)${cliente?.nombre ? " — " + cliente.nombre : ""}`,
-      });
-    }
-  } catch (e) { alert(e.message); console.error(e); }
-  closeModal();
-  await loadAll();
-  await abrirClienteDetalle(clienteId);
+    try {
+      const grupo = nuevoGrupoId();
+      for (const p of plan.pagos) {
+        await CG.rpc.registrarCobro({ cliente_id: clienteId, venta_id: p.venta_id, monto: p.cobra, medio_pago, registrado_por, cliente_nombre: cliente?.nombre, grupo });
+      }
+      if (plan.sobrante > 0) {
+        await CG.rpc.movimientoCaja({
+          tipo: "ingreso_extra", monto: plan.sobrante, medio_pago, registrado_por,
+          descripcion: `Redondeo de cobro (${plan.pagos.length} deudas)${cliente?.nombre ? " — " + cliente.nombre : ""}`,
+        });
+      }
+    } catch (e) { alert(e.message); console.error(e); }
+    closeModal();
+    await loadAll();
+    await abrirClienteDetalle(clienteId);
   } finally {
     procesandoAccion = false;
   }
@@ -2297,7 +2384,7 @@ async function cobrarConSobrante({ cliente_id, venta_id, montoPagado, pendiente,
   const cobroReal = (pendiente != null && montoPagado > pendiente) ? pendiente : montoPagado;
   const sobrante = (pendiente != null) ? Math.max(0, montoPagado - pendiente) : 0;
   if (cobroReal > 0) {
-    await CG.rpc.registrarCobro({ cliente_id, venta_id, monto: cobroReal, medio_pago, registrado_por, cliente_nombre, grupo: crypto.randomUUID() });
+    await CG.rpc.registrarCobro({ cliente_id, venta_id, monto: cobroReal, medio_pago, registrado_por, cliente_nombre, grupo: nuevoGrupoId() });
   }
   if (sobrante > 0) {
     try {
@@ -3353,6 +3440,33 @@ const fmtFechaHora = (f) => new Date(f).toLocaleString("es-PY", { day: "2-digit"
 const campoTicket = (etiqueta, valor) => `<div><p class="text-[10px] text-[#8a7d94]">${etiqueta}</p><p class="text-[13px] font-semibold text-[#241C2E] break-words">${valor}</p></div>`;
 const SVG_TICKET = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2F9E7A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2v20l3-2 3 2 3-2 3 2 3-2V2l-3 2-3-2-3 2-3-2-3 2z"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/></svg>`;
 
+// Botón para anular un cobro hecho por error: las deudas vuelven a pendiente y se revierte la caja.
+// Solo si el cobro es de la caja abierta (en cajas ya cerradas se corrige desde el cliente).
+function botonAnularCobro(g) {
+  const puedeEnCajaAbierta = cajaActual && g.movs.every((m) => m.caja_id === cajaActual.id && m.cobro_id);
+  if (!puedeEnCajaAbierta) {
+    return `<p class="text-[11px] text-[#8a7d94] mb-2 text-center">Este cobro es de una caja ya cerrada. Para corregirlo, andá al cliente → "Ver pagos" → Anular.</p>`;
+  }
+  return `<button onclick="anularCobroGrupo()" class="w-full bg-[#D64545]/10 text-[#D64545] font-semibold rounded-xl py-3 mb-2">Anular este cobro (vuelve a pendiente)</button>`;
+}
+
+async function anularCobroGrupo() {
+  const g = window.__cobroGrupoActual;
+  if (!g || procesandoAccion) return;
+  const nVentas = new Set(g.partes.map((p) => p.venta_id).filter(Boolean)).size;
+  if (!confirm(`¿Anular este cobro de ${fmt(g.monto)}?\n\n${nVentas > 1 ? "Las " + nVentas + " ventas vuelven" : "La venta vuelve"} a quedar pendiente de cobro y el dinero se descuenta de la caja.`)) return;
+  procesandoAccion = true;
+  try {
+    try {
+      for (const m of g.movs) await CG.rpc.anularCobro(m.cobro_id, "cobro anulado desde la caja", usuarios[0]?.nombre || "");
+    } catch (e) { alert(e.message); console.error(e); }
+    closeModal();
+    await loadAll();
+  } finally {
+    procesandoAccion = false;
+  }
+}
+
 function pagadoEnCobro(g, ventaId) {
   return g.partes.filter((p) => p.venta_id === ventaId).reduce((s, p) => s + p.monto, 0);
 }
@@ -3386,6 +3500,7 @@ function renderResumenCobro() {
         </button>`;
       }).join("")}
     </div>
+    ${botonAnularCobro(g)}
     <button onclick="closeModal()" class="w-full bg-[#F7F3FA] text-[#241C2E] font-semibold rounded-xl py-3">Cerrar</button>
   `);
 }
@@ -3448,7 +3563,7 @@ function renderTicketCobro(ventaId, conVolver) {
         <span class="font-mono-num text-[14px] font-semibold text-[#241C2E]">${fmt(totalReferencia)}</span>
       </div>
     </div>
-    ${conVolver ? `<button onclick="renderResumenCobro()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3 mb-2">‹ Volver al cobro</button>` : ""}
+    ${conVolver ? `<button onclick="renderResumenCobro()" class="w-full bg-[#6B2D5C] text-white font-semibold rounded-xl py-3 mb-2">‹ Volver al cobro</button>` : botonAnularCobro(g)}
     ${cerrar}
   `);
 }
