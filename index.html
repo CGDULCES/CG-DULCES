@@ -240,7 +240,17 @@ async function loadAll() {
   const cargas = { loadCategorias, loadProductos, loadPromociones, loadUsuarios, loadVentas, loadProveedores, loadCompras, loadClientes, loadVentasClientes, loadCobros, loadCaja, loadHistorial, loadRepartosClientes, loadRecetas, loadConfiguracion };
   const resultados = await Promise.allSettled(Object.values(cargas).map((f) => f()));
   resultados.forEach((r, i) => { if (r.status === "rejected") console.error("Falló", Object.keys(cargas)[i], r.reason); });
+  window.__ultimaCarga = Date.now();
+  window.__cacheCaja = null;
   render();
+}
+
+// Cambio de pestaña rápido: se dibuja al instante con los datos ya cargados y
+// solo se vuelve a consultar la base si pasaron más de 45 segundos.
+async function cambiarPestana(tab) {
+  activeTab = tab;
+  if (window.__ultimaCarga && Date.now() - window.__ultimaCarga < 45000) { render(); return; }
+  await loadAll();
 }
 
 async function loadRecetas() {
@@ -830,18 +840,8 @@ async function mostrarCierreCompartible(cajaId) {
       ${fila("Banco esperado", fmt(data.esperado_banco))}
       ${data.cierre_banco != null ? fila("Banco contado", fmt(data.cierre_banco), " · " + chip(data.diferencia_banco)) : ""}
     </div>
-    <button onclick="CG.abrirWhatsApp('', window.__ultimoCierreTexto)" class="w-full bg-[#25D366] text-white font-semibold rounded-xl py-3 mb-2.5 flex items-center justify-center gap-2">
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91S17.5 2 12.04 2zm5.8 14.16c-.24.68-1.19 1.25-1.95 1.41-.52.11-1.2.2-3.48-.75-2.92-1.21-4.8-4.17-4.94-4.36-.14-.19-1.18-1.57-1.18-3 0-1.43.75-2.13 1.02-2.42.27-.29.58-.36.78-.36.19 0 .39 0 .56.01.18.01.42-.07.65.5.24.58.82 2 .89 2.15.07.15.11.32.02.51-.09.19-.14.31-.27.48-.14.17-.29.37-.41.5-.14.14-.28.29-.12.57.16.28.71 1.18 1.53 1.91 1.05.94 1.94 1.23 2.22 1.37.28.14.44.12.6-.07.16-.19.68-.79.87-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.32.06.11.06.66-.18 1.34z"/></svg>
-      Compartir por WhatsApp
-    </button>
     <button onclick="closeModal()" class="w-full bg-[#F7F3FA] text-[#241C2E] font-semibold rounded-xl py-3">Listo</button>
   `);
-}
-
-// Comparte el resumen de la caja abierta ahora mismo (una foto del día sin cerrarla)
-function compartirCierreActual() {
-  if (!cajaActual) { alert("No hay ninguna caja abierta."); return; }
-  mostrarCierreCompartible(cajaActual.id);
 }
 
 function openMovimientoCaja(tipo) {
@@ -899,10 +899,35 @@ function divCuentaPartes() {
   return { totalReal, n, red, porPersona, totalCobrar };
 }
 
+// Solo recalcula el cuadro de totales (sin redibujar el modal → no se pierde el scroll)
+function actualizarResumenDivCuenta() {
+  const el = document.getElementById("div-resumen");
+  if (!el) return;
+  const { totalReal, n, red, porPersona, totalCobrar } = divCuentaPartes();
+  el.innerHTML = `
+      <div class="flex items-center justify-between text-[13px] mb-1">
+        <span class="text-[#8a7d94]">Precio real</span>
+        <span class="font-mono-num font-semibold">${fmt(totalReal)}</span>
+      </div>
+      <div class="flex items-center justify-between text-[13px]">
+        <span class="text-[#8a7d94]">Entre ${n} persona(s)</span>
+        <span class="font-mono-num font-semibold text-[#6B2D5C]">${fmt(porPersona)} c/u</span>
+      </div>
+      ${red > 0 ? `<div class="flex items-center justify-between text-[12px] mt-1 pt-1 border-t border-black/[0.06]">
+        <span class="text-[#8a7d94]">Total a cobrar (redondeado)</span>
+        <span class="font-mono-num font-semibold text-[#2F9E7A]">${fmt(totalCobrar)}${totalCobrar>totalReal ? ` (+${fmt(totalCobrar-totalReal)})` : ""}</span>
+      </div>` : ""}`;
+}
+
 function renderDividirCuentaModal() {
   const productos_ = ventasVisibles();
   const { totalReal, n: cantidadSeleccionados, red, porPersona, totalCobrar } = divCuentaPartes();
   const total = totalReal;
+  // Guardar posición de scroll para restaurarla después de redibujar
+  const caja = document.getElementById("modal-box");
+  const lista0 = document.getElementById("div-lista-clientes");
+  const scrollCaja = caja ? caja.scrollTop : 0;
+  const scrollLista = lista0 ? lista0.scrollTop : 0;
 
   showModal(`
     <p class="font-display text-[18px] font-semibold text-[#241C2E] mb-4">Dividir cuenta</p>
@@ -925,7 +950,7 @@ function renderDividirCuentaModal() {
     <br />
 
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">¿Entre quiénes se reparte?</label>
-    <div class="space-y-1.5 mt-2 mb-4 max-h-[180px] overflow-y-auto">
+    <div id="div-lista-clientes" class="space-y-1.5 mt-2 mb-4 max-h-[180px] overflow-y-auto">
       ${clientes.map((c) => `
         <label class="flex items-center gap-2 bg-[#F7F3FA] rounded-lg px-3 py-2">
           <input type="checkbox" onchange="toggleClienteDivCuenta(${c.id}, this.checked)" ${window.__divCuentaSeleccion.has(c.id)?"checked":""} class="w-4 h-4" />
@@ -938,14 +963,14 @@ function renderDividirCuentaModal() {
     </div>
 
     <label class="text-[11px] font-semibold uppercase tracking-wide text-[#8a7d94]">Redondear la parte de cada uno</label>
-    <select id="div-redondeo" onchange="window.__divCuentaRedondeo = Number(this.value); renderDividirCuentaModal();" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none">
+    <select id="div-redondeo" onchange="window.__divCuentaRedondeo = Number(this.value); actualizarResumenDivCuenta();" class="w-full bg-[#F7F3FA] rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-4 outline-none">
       <option value="0" ${red===0?"selected":""}>Sin redondear (parte exacta)</option>
       <option value="100" ${red===100?"selected":""}>A los 100 más cercanos (hacia arriba)</option>
       <option value="500" ${red===500?"selected":""}>A los 500 más cercanos (hacia arriba)</option>
       <option value="1000" ${red===1000?"selected":""}>A los 1.000 más cercanos (hacia arriba)</option>
     </select>
 
-    <div class="bg-[#F7F3FA] rounded-xl p-3 mb-5">
+    <div id="div-resumen" class="bg-[#F7F3FA] rounded-xl p-3 mb-5">
       <div class="flex items-center justify-between text-[13px] mb-1">
         <span class="text-[#8a7d94]">Precio real</span>
         <span class="font-mono-num font-semibold">${fmt(total)}</span>
@@ -962,15 +987,19 @@ function renderDividirCuentaModal() {
 
     <button onclick="confirmarDividirCuenta()" class="w-full bg-[#2F9E7A] text-white font-semibold rounded-xl py-3">Registrar y dividir</button>
   `);
+  const caja1 = document.getElementById("modal-box");
+  const lista1 = document.getElementById("div-lista-clientes");
+  if (caja1) caja1.scrollTop = scrollCaja;
+  if (lista1) lista1.scrollTop = scrollLista;
 }
 
 function cambiarProductoDivCuenta(i, id) {
   window.__divCuentaItems[i].producto_id = Number(id);
-  renderDividirCuentaModal();
+  actualizarResumenDivCuenta();
 }
 function cambiarCantidadDivCuenta(i, valor) {
   window.__divCuentaItems[i].cantidad = Math.max(1, Number(valor) || 1);
-  renderDividirCuentaModal();
+  actualizarResumenDivCuenta();
 }
 function agregarItemDivCuenta() {
   window.__divCuentaItems.push({ producto_id: ventasVisibles()[0]?.id, cantidad: 1 });
@@ -983,7 +1012,7 @@ function quitarItemDivCuenta(i) {
 function toggleClienteDivCuenta(id, checked) {
   if (checked) window.__divCuentaSeleccion.add(id);
   else window.__divCuentaSeleccion.delete(id);
-  renderDividirCuentaModal();
+  actualizarResumenDivCuenta();
 }
 async function crearClienteDivCuenta() {
   const nombre = document.getElementById("div-nuevo-cliente").value.trim();
@@ -1252,7 +1281,7 @@ function cambiarVistaInventario(vista) {
   render();
 }
 
-async function irA(tab) { activeTab = tab; await loadAll(); }
+async function irA(tab) { await cambiarPestana(tab); }
 
 // ---------- Proveedores ----------
 function renderProveedores(content) {
@@ -1647,11 +1676,6 @@ function renderClienteDetalle(content) {
       ${cliente.telefono ? `<p class="text-[12px] text-[#8a7d94] mt-0.5">📱 ${CG.escapeHtml(cliente.telefono)}</p>` : ""}
       <p class="text-[13px] mt-1 ${deudaTotal > 0 ? 'text-[#D64545] font-semibold' : 'text-[#2F9E7A] font-semibold'}">${deudaTotal > 0 ? `Debe en total ${fmt(deudaTotal)}` : "Sin deuda pendiente"}</p>
       ${pagosSinVenta > 0 ? `<p class="text-[11px] text-[#8a7d94] mt-1">Aparte, hay ${fmt(pagosSinVenta)} en pagos viejos sin venta asociada (no están descontados de este total)</p>` : ""}
-      ${deudaTotal > 0 ? `
-      <button onclick="recordarDeudaWhatsapp(${cliente.id})" class="mt-3 w-full bg-[#25D366] text-white font-semibold rounded-xl py-2.5 text-[13px] flex items-center justify-center gap-2">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91S17.5 2 12.04 2zm5.8 14.16c-.24.68-1.19 1.25-1.95 1.41-.52.11-1.2.2-3.48-.75-2.92-1.21-4.8-4.17-4.94-4.36-.14-.19-1.18-1.57-1.18-3 0-1.43.75-2.13 1.02-2.42.27-.29.58-.36.78-.36.19 0 .39 0 .56.01.18.01.42-.07.65.5.24.58.82 2 .89 2.15.07.15.11.32.02.51-.09.19-.14.31-.27.48-.14.17-.29.37-.41.5-.14.14-.28.29-.12.57.16.28.71 1.18 1.53 1.91 1.05.94 1.94 1.23 2.22 1.37.28.14.44.12.6-.07.16-.19.68-.79.87-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.32.06.11.06.66-.18 1.34z"/></svg>
-        Recordar deuda por WhatsApp
-      </button>` : ""}
     </div>
 
     <div class="flex items-center justify-between mb-2">
@@ -1765,29 +1789,6 @@ function totalCobroSeleccionado() {
     if (r) t += Math.max(0, r.monto - pagadoDeReparto(vid));
   });
   return t;
-}
-
-// Arma un mensaje de recordatorio de deuda y lo abre en WhatsApp (al teléfono
-// del cliente si lo tiene guardado, o al selector de contactos si no).
-function recordarDeudaWhatsapp(clienteId) {
-  const cliente = clientes.find((c) => c.id === clienteId);
-  if (!cliente) return;
-  const ventas = window.__clienteDetalleVentas || [];
-  const repartos = window.__clienteDetalleRepartos || [];
-  const pendientes = [];
-  ventas.filter((v) => v.es_fiado).forEach((v) => {
-    const p = Math.max(0, Number(v.total) - pagadoDeVenta(v.id));
-    if (p > 0) pendientes.push({ created_at: v.created_at, pendiente: p });
-  });
-  repartos.forEach((r) => {
-    const p = Math.max(0, Number(r.monto) - pagadoDeReparto(r.venta_id));
-    if (p > 0) pendientes.push({ created_at: r.created_at, pendiente: p });
-  });
-  const deuda = pendientes.reduce((s, x) => s + x.pendiente, 0);
-  if (deuda <= 0) { alert("Este cliente no tiene deuda pendiente."); return; }
-  pendientes.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-  const mensaje = CG.mensajeFiado({ negocio: "CG Dulces", cliente, deuda, ventas: pendientes, redondeo: redondeoMensajes() });
-  CG.abrirWhatsApp(cliente.telefono || "", mensaje);
 }
 
 function toggleSeleccionVenta(ventaId, checked) {
@@ -3107,8 +3108,18 @@ async function renderCaja(content) {
   `;
 
   // Traer TODAS las cajas que existieron alguna vez, en orden, con sus movimientos
-  const { data: todasLasCajas } = await sb.from("caja").select("*").order("fecha_apertura", { ascending: true });
-  const { data: todosLosMovs } = await selectTodo("caja_movimientos", "*", (q) => q.order("fecha", { ascending: true }).order("id"));
+  // (se guarda en memoria hasta la próxima carga/cambio, para no pedir todo en cada visita)
+  if (!window.__cacheCaja) {
+    const [rc, rm] = await Promise.all([
+      sb.from("caja").select("*").order("fecha_apertura", { ascending: true }),
+      selectTodo("caja_movimientos", "*", (q) => q.order("fecha", { ascending: true }).order("id")),
+    ]);
+    if (rc.data && rm.data) window.__cacheCaja = { cajas: rc.data, movs: rm.data };
+    else window.__cacheCaja = { cajas: rc.data || [], movs: rm.data || [], parcial: true };
+  }
+  const todasLasCajas = window.__cacheCaja.cajas;
+  const todosLosMovs = window.__cacheCaja.movs;
+  if (window.__cacheCaja.parcial) window.__cacheCaja = null;
 
   if (!todasLasCajas || todasLasCajas.length === 0) {
     content.innerHTML = renderEstadoCaja() + `
@@ -3141,8 +3152,6 @@ async function renderCaja(content) {
     }
   });
 
-  const huerfanosTotal = (todosLosMovs || []).filter((m) => m.tipo === "compra" && !m.compra_id);
-
   // Primero calculamos el saldo en orden cronológico (necesario para que la cuenta sea correcta)...
   const bloquesConSaldo = bloques.map((b) => {
     if (b.tipo === "mov") {
@@ -3170,11 +3179,10 @@ async function renderCaja(content) {
     }
     const m = b.data;
     const monto = Number(m.monto);
-    const huerfano = m.tipo === "compra" && !m.compra_id;
     return `
-      <div class="bg-white rounded-xl p-3 shadow-sm border ${huerfano ? 'border-[#D64545]/40' : 'border-black/[0.04]'}">
+      <div class="bg-white rounded-xl p-3 shadow-sm border border-black/[0.04]">
         <div class="flex items-center justify-between">
-          <span class="text-[12px] font-semibold text-[#241C2E]">${huerfano ? "⚠ " : ""}${TIPO_LABEL[m.tipo] || m.tipo} · ${b.esBanco ? "Banco" : "Efectivo"}</span>
+          <span class="text-[12px] font-semibold text-[#241C2E]">${TIPO_LABEL[m.tipo] || m.tipo} · ${b.esBanco ? "Banco" : "Efectivo"}</span>
           <span class="font-mono-num text-[12px] font-semibold ${b.signo>0?'text-[#2F9E7A]':'text-[#D64545]'}">${b.signo>0?"+":"−"}${fmt(monto)}</span>
         </div>
         <p class="text-[10px] text-[#8a7d94]">${new Date(m.fecha).toLocaleString("es-PY",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false,timeZone:"America/Asuncion"})}${m.descripcion ? " · " + m.descripcion : ""}</p>
@@ -3183,18 +3191,6 @@ async function renderCaja(content) {
   }).join("");
 
   content.innerHTML = renderEstadoCaja() + `
-    ${cajaActual ? `
-    <button onclick="compartirCierreActual()" class="w-full bg-white border border-black/[0.06] rounded-xl px-4 py-2.5 mb-4 flex items-center justify-center gap-2">
-      <svg width="15" height="15" viewBox="0 0 24 24" fill="#25D366"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2 22l5.25-1.38c1.45.79 3.08 1.21 4.79 1.21 5.46 0 9.91-4.45 9.91-9.91S17.5 2 12.04 2zm5.8 14.16c-.24.68-1.19 1.25-1.95 1.41-.52.11-1.2.2-3.48-.75-2.92-1.21-4.8-4.17-4.94-4.36-.14-.19-1.18-1.57-1.18-3 0-1.43.75-2.13 1.02-2.42.27-.29.58-.36.78-.36.19 0 .39 0 .56.01.18.01.42-.07.65.5.24.58.82 2 .89 2.15.07.15.11.32.02.51-.09.19-.14.31-.27.48-.14.17-.29.37-.41.5-.14.14-.28.29-.12.57.16.28.71 1.18 1.53 1.91 1.05.94 1.94 1.23 2.22 1.37.28.14.44.12.6-.07.16-.19.68-.79.87-1.06.18-.27.36-.22.61-.13.25.09 1.58.75 1.85.88.27.14.45.2.52.32.06.11.06.66-.18 1.34z"/></svg>
-      <span class="text-[12px] text-[#6B2D5C] font-semibold">Compartir resumen de la caja de hoy</span>
-    </button>` : ""}
-
-    ${huerfanosTotal.length > 0 ? `
-    <div class="bg-[#D64545]/10 border border-[#D64545]/25 rounded-xl p-4 mb-4">
-      <p class="text-[12px] font-semibold text-[#D64545] mb-1">⚠ ${huerfanosTotal.length} movimiento(s) de compra sin compra asociada, en todo el historial</p>
-      <p class="text-[11px] text-[#8a7d94]">Suman ${fmt(huerfanosTotal.reduce((s,f)=>s+Number(f.monto),0))} restados del saldo total. Es probable que sean de compras eliminadas antes de la corrección. Están marcados con ⚠ en la lista de abajo.</p>
-    </div>` : ""}
-
     ${sectionLabel(`Movimientos de caja (${todasLasCajas.length} caja${todasLasCajas.length>1?'s':''} en total)`)}
     <div class="space-y-2">${filasHtml}</div>
   `;
@@ -4904,7 +4900,7 @@ document.getElementById("modal-overlay").addEventListener("click", (e) => {
 
 // ---------- Navegación ----------
 document.querySelectorAll(".tab-btn").forEach((btn) => {
-  btn.addEventListener("click", async () => { activeTab = btn.dataset.tab; await loadAll(); });
+  btn.addEventListener("click", () => cambiarPestana(btn.dataset.tab));
 });
 document.getElementById("add-product-fab").addEventListener("click", openNewProduct);
 
