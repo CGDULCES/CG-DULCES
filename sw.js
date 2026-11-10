@@ -1,145 +1,21 @@
 /* =====================================================================
- * CG DULCES · Service Worker
+ * CG DULCES · Service Worker (mínimo)
  * ---------------------------------------------------------------------
- * - Deja la app instalable y que ABRA sin internet (el "cascarón").
- * - HTML: network-first (siempre trae la última versión si hay señal).
- * - .js / .css / manifest propios: network-first (si hay internet, SIEMPRE
- *   se usa la versión nueva; offline cae al cache). Así una actualización
- *   de código nunca queda "pegada" en un celular aunque no se toque este
- *   archivo sw.js.
- * - Imágenes/íconos propios: cache-first (no cambian casi nunca, ahorra datos).
- * - Librerías de CDN y fuentes: stale-while-revalidate.
- * - Las llamadas a Supabase NUNCA se cachean (siempre datos frescos).
- *
- * Igual, si cambiás algo de este mismo archivo (sw.js), el navegador lo
- * detecta solo y actualiza. Si alguna vez hace falta forzar un refresco
- * total en todos los celulares, subí CACHE_VERSION.
+ * Solo existe para que la app se pueda instalar en el celular/compu.
+ * NO guarda nada para usar sin internet: si no hay conexión, la app no abre
+ * y el propio navegador avisa que no hay internet.
+ * Al activarse borra cualquier copia guardada por versiones anteriores,
+ * así siempre se carga la versión más nueva del sistema.
  * ===================================================================== */
-const CACHE_VERSION = "cg-v13";
-const STATIC_CACHE = `${CACHE_VERSION}-static`;
-const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
-
-const PRECACHE = [
-  "./",
-  "./index.html",
-  "./offline.html",
-  "./manifest.webmanifest",
-  "./css/sistema.css",
-  "./js/lib/util.js",
-  "./js/rpc.js",
-  "./js/pwa.js",
-  "./js/app/base.js",
-  "./js/app/caja.js",
-  "./js/app/catalogos.js",
-  "./js/app/clientes.js",
-  "./js/app/cobros.js",
-  "./js/app/compartido.js",
-  "./js/app/compras.js",
-  "./js/app/configuracion.js",
-  "./js/app/dashboard.js",
-  "./js/app/datos.js",
-  "./js/app/dividir-cuenta.js",
-  "./js/app/estado.js",
-  "./js/app/helados.js",
-  "./js/app/historial-ventas.js",
-  "./js/app/informes.js",
-  "./js/app/inicio.js",
-  "./js/app/inventario.js",
-  "./js/app/marca.js",
-  "./js/app/navegacion.js",
-  "./js/app/sesion.js",
-  "./js/app/tema.js",
-  "./js/app/ventas.js",
-  "./assets/logo.png",
-  "./assets/logo-mark.png",
-  "./assets/icon-192.png",
-  "./assets/icon-512.png",
-];
-
-self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(STATIC_CACHE).then((c) => c.addAll(PRECACHE)).then(() => self.skipWaiting())
-  );
-});
+self.addEventListener("install", () => self.skipWaiting());
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => !k.startsWith(CACHE_VERSION)).map((k) => caches.delete(k)))
-    ).then(() => self.clients.claim())
+    caches.keys()
+      .then((claves) => Promise.all(claves.map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });
 
-self.addEventListener("message", (e) => {
-  if (e.data === "skipWaiting") self.skipWaiting();
-});
-
-self.addEventListener("fetch", (event) => {
-  const { request } = event;
-  if (request.method !== "GET") return;
-
-  const url = new URL(request.url);
-
-  // Nunca tocar la API de Supabase / Auth / Storage
-  if (/supabase\.(co|in)$/.test(url.hostname) || url.pathname.startsWith("/auth/") ||
-      url.pathname.startsWith("/rest/") || url.pathname.startsWith("/storage/")) {
-    return; // deja pasar a la red normalmente
-  }
-
-  // Navegación / HTML -> network-first con fallback a cache y a offline.html
-  if (request.mode === "navigate" || (request.headers.get("accept") || "").includes("text/html")) {
-    event.respondWith(
-      fetch(request)
-        .then((resp) => {
-          const copy = resp.clone();
-          caches.open(RUNTIME_CACHE).then((c) => c.put(request, copy));
-          return resp;
-        })
-        .catch(() => caches.match(request).then((r) => r || caches.match("./offline.html")))
-    );
-    return;
-  }
-
-  // Mismo origen, código (.js/.css/manifest) -> network-first: si hay
-  // internet, siempre la version mas nueva; sin internet, cae al cache.
-  if (url.origin === self.location.origin && /\.(js|css)$|manifest\.webmanifest$/.test(url.pathname)) {
-    event.respondWith(
-      fetch(request)
-        .then((resp) => {
-          const copy = resp.clone();
-          caches.open(STATIC_CACHE).then((c) => c.put(request, copy));
-          return resp;
-        })
-        .catch(() => caches.match(request))
-    );
-    return;
-  }
-
-  // Mismo origen, el resto (imágenes/íconos) -> cache-first
-  if (url.origin === self.location.origin) {
-    event.respondWith(
-      caches.match(request).then((cached) =>
-        cached ||
-        fetch(request).then((resp) => {
-          const copy = resp.clone();
-          caches.open(STATIC_CACHE).then((c) => c.put(request, copy));
-          return resp;
-        })
-      )
-    );
-    return;
-  }
-
-  // CDN de librerías + Google Fonts -> stale-while-revalidate
-  if (/cdn\.tailwindcss\.com|cdn\.jsdelivr\.net|fonts\.(googleapis|gstatic)\.com/.test(url.hostname)) {
-    event.respondWith(
-      caches.open(RUNTIME_CACHE).then(async (cache) => {
-        const cached = await cache.match(request);
-        const network = fetch(request)
-          .then((resp) => { cache.put(request, resp.clone()); return resp; })
-          .catch(() => cached);
-        return cached || network;
-      })
-    );
-  }
-});
+// Sin lógica: todo pasa directo a la red (necesario para que el navegador permita instalar la app).
+self.addEventListener("fetch", () => {});

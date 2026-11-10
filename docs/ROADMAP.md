@@ -8,7 +8,7 @@
 - **Transacciones atómicas** en la base — `supabase/03_rpc.sql`.
 - **Vistas de análisis** — `supabase/05_views.sql`.
 - **Triggers** de historial de precios + lotes de vencimiento — `supabase/04_triggers.sql`.
-- **PWA:** instalable, abre sin internet — `manifest.webmanifest`, `sw.js`, `js/pwa.js`.
+- **PWA:** instalable; no tiene modo sin internet (si no hay conexión avisa el navegador) — `manifest.webmanifest`, `sw.js`, `js/pwa.js`.
 - **Repo:** documentado, imágenes fuera del HTML, `js/lib/util.js` + `js/rpc.js`.
 - Backup automático (Edge Function) — **lista, falta deploy** (`docs/MIGRATION.md` paso 6).
 
@@ -48,7 +48,7 @@
   transaccional). `saveEditCompra` / `deleteCompra`.
 - Historial de precios de compra: se guarda solo (trigger) y se puede consultar
   en la vista `v_precio_historial`; falta una pantalla que lo muestre.
-- Cola de escritura offline (seguir vendiendo sin señal y sincronizar después).
+- (Descartado) Modo sin internet: se decidió que la app no abra sin conexión.
 - Login por vendedor con PIN (`docs/SECURITY.md`, sección Fase 2).
 - Sacar Tailwind del CDN (`docs/DE-CDN.md`).
 - Export CSV para el contador (los datos ya están; falta el botón en Reportes).

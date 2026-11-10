@@ -94,10 +94,10 @@ const rpcFalta = [...rpcUsadas].filter((x) => !rpcDef.has(x));
 rpcFalta.length ? mal("CG.rpc sin definir en rpc.js: " + rpcFalta.join(", ")) : ok("todas las llamadas CG.rpc.* están definidas en rpc.js");
 
 // 7) service worker
-seccion("7. Service Worker");
-const pre = [...leer("sw.js").matchAll(/^\s+"\.\/([^"]*)",?$/gm)].map((m) => m[1]).filter((p) => p && !p.endsWith("/"));
-const preFalta = pre.filter((p) => !existe(p));
-preFalta.length ? mal("precarga archivos que no existen (rompería la instalación): " + preFalta.join(", ")) : ok(`${pre.length} archivos precargados, todos existen`);
+seccion("7. Service Worker (sin modo offline)");
+const swTxt = leer("sw.js");
+/offline.html|caches.open|PRECACHE/.test(swTxt) ? mal("sw.js guarda copias o usa offline.html (la app no debe funcionar sin internet)") : ok("el Service Worker no guarda copias: sin internet, avisa el navegador");
+existe("offline.html") ? mal("sobra offline.html") : ok("no hay pantalla offline propia");
 
 // 8) texto sin proteger
 seccion("8. Textos de usuario protegidos (sin código)");

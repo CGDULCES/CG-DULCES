@@ -14,16 +14,15 @@ recetas/producción, promociones, pérdidas, reportes y auditoría.
 
 ```
 index.html              Solo la estructura de la pantalla (unas 150 líneas)
-offline.html            Pantalla "sin internet" (PWA)
 manifest.webmanifest    Metadatos para instalar como app
-sw.js                   Service Worker (abre offline, cachea el cascarón)
+sw.js                   Service Worker mínimo (solo para poder instalar la app; no hay modo sin internet)
 
 assets/                 Logo e íconos
 css/sistema.css         Estilos propios (colores, pantalla completa, versión de computadora)
 js/
   lib/util.js           Helpers: escape HTML, WhatsApp, CSV, cierre, errores
   rpc.js                Envoltorio de las funciones transaccionales de la base
-  pwa.js                Registro del Service Worker + aviso sin-conexión
+  pwa.js                Registro del Service Worker
   app/                  El sistema, dividido por partes (cada archivo es una parte):
     tema.js             Configuración de Tailwind y colores guardados
     estado.js           Conexión a Supabase (URL y clave pública) y listas de datos compartidas
@@ -105,7 +104,7 @@ Este repo está en una migración por fases (ver **[docs/ROADMAP.md](docs/ROADMA
 | Seguridad (RLS) | SQL listo — falta aplicarlo |
 | Transacciones atómicas / condición de carrera | RPC listas — falta que el frontend las use |
 | Backup automático | Edge Function lista — falta deploy |
-| PWA / offline | Instalable y abre offline ✔ · cola de escritura offline → Fase 2 |
+| PWA | Instalable ✔ · sin modo offline: sin internet avisa el navegador |
 | De-CDN (Tailwind) | Build configurado — falta correr `npm run build:css` |
 | Repo / esquema documentado | ✔ |
 | WhatsApp, cierre compartible, reposición, analítica, pedidos, vencimientos, fotos, mayorista, rentabilidad, historial de precios, export contador | Backend + helpers listos — UI en Fase 2 |
