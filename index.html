@@ -4139,7 +4139,10 @@ function renderCompraModal() {
   }).join("");
 
   showModal(`
-    <p class="font-display text-[18px] font-semibold text-cg-ink mb-4">${editando ? "Editar compra" : "Nueva compra"}</p>
+    <div class="sticky top-0 z-10 bg-cg-card -mx-5 -mt-5 px-5 pt-5 pb-3 mb-1 flex items-start justify-between gap-3">
+      <p class="font-display text-[18px] font-semibold text-cg-ink">${editando ? "Editar compra" : "Nueva compra"}</p>
+      <button type="button" onclick="cerrarFormularioCompra()" aria-label="Cerrar el formulario" class="w-8 h-8 rounded-full bg-cg-surface text-cg-ink text-[18px] leading-none font-semibold flex items-center justify-center shrink-0">×</button>
+    </div>
     <label class="text-[11px] font-semibold uppercase tracking-wide text-cg-muted">Fecha de la compra</label>
     <input id="compra-fecha" type="date" value="${window.__compraFecha}" onchange="window.__compraFecha = this.value" class="w-full bg-cg-surface rounded-xl px-3 py-2.5 text-[14px] mt-1 mb-3 outline-none" />
     <label class="text-[11px] font-semibold uppercase tracking-wide text-cg-muted">Proveedor</label>
@@ -4188,7 +4191,7 @@ function renderCompraModal() {
 
     <button onclick="${editando ? "saveEditCompra()" : "saveNewCompra()"}" class="w-full bg-cg-primary text-cg-onink font-semibold rounded-xl py-3">${editando ? "Guardar cambios" : "Registrar compra"}</button>
     ${editando ? `<button onclick="deleteCompra()" class="w-full text-cg-danger text-[13px] font-semibold py-3 mt-1">Eliminar esta compra</button>` : ""}
-  `);
+  `, { bloquear: true, conservarScroll: true });
   window.__medioPagoCompra = medioPagoActual;
 }
 
@@ -5318,17 +5321,33 @@ async function saveNewProduct() {
 }
 
 // ---------- Modal genérico ----------
-function showModal(html) {
-  document.getElementById("modal-box").innerHTML = html;
+// opciones.bloquear: el formulario NO se cierra al tocar afuera (solo con la "×"), para no perder lo escrito.
+// opciones.conservarScroll: si se vuelve a dibujar el mismo formulario, mantiene la posición.
+window.__modalBloqueado = false;
+function showModal(html, opciones = {}) {
+  const caja = document.getElementById("modal-box");
+  const abierto = !document.getElementById("modal-overlay").classList.contains("screen-hidden");
+  const scrollPrevio = caja.scrollTop;
+  window.__modalBloqueado = !!opciones.bloquear;
+  caja.innerHTML = html;
+  if (opciones.conservarScroll && abierto) caja.scrollTop = scrollPrevio;
   document.getElementById("modal-overlay").classList.remove("screen-hidden");
   document.getElementById("modal-overlay").classList.add("flex");
 }
 function closeModal() {
+  window.__modalBloqueado = false;
   document.getElementById("modal-overlay").classList.add("screen-hidden");
   document.getElementById("modal-overlay").classList.remove("flex");
 }
+// Cerrar el formulario de compras con la "×": se descarta todo lo que se había cargado
+function cerrarFormularioCompra() {
+  window.__compraItems = [];
+  window.__compraDescuento = 0;
+  window.__editingCompraId = null;
+  closeModal();
+}
 document.getElementById("modal-overlay").addEventListener("click", (e) => {
-  if (e.target.id === "modal-overlay") closeModal();
+  if (e.target.id === "modal-overlay" && !window.__modalBloqueado) closeModal();
 });
 
 // ---------- Navegación ----------
