@@ -237,7 +237,9 @@ async function selectTodo(tabla, columnas, ajustar) {
 }
 
 async function loadAll() {
-  await Promise.all([loadCategorias(), loadProductos(), loadPromociones(), loadUsuarios(), loadVentas(), loadProveedores(), loadCompras(), loadClientes(), loadVentasClientes(), loadCobros(), loadCaja(), loadHistorial(), loadRepartosClientes(), loadRecetas(), loadConfiguracion()]);
+  const cargas = { loadCategorias, loadProductos, loadPromociones, loadUsuarios, loadVentas, loadProveedores, loadCompras, loadClientes, loadVentasClientes, loadCobros, loadCaja, loadHistorial, loadRepartosClientes, loadRecetas, loadConfiguracion };
+  const resultados = await Promise.allSettled(Object.values(cargas).map((f) => f()));
+  resultados.forEach((r, i) => { if (r.status === "rejected") console.error("Falló", Object.keys(cargas)[i], r.reason); });
   render();
 }
 
@@ -522,26 +524,24 @@ function render() {
   document.getElementById("add-product-fab").classList.toggle("screen-hidden", activeTab !== "inventario");
   document.getElementById("add-product-fab").classList.toggle("flex", activeTab === "inventario");
 
-  if (activeTab === "dashboard") renderDashboard(content);
-  if (activeTab === "ventas") renderVender(content);
-  if (activeTab === "caja") renderCaja(content);
-  if (activeTab === "inventario") renderInventario(content);
-  if (activeTab === "proveedores") renderProveedores(content);
-  if (activeTab === "clientes") renderClientes(content);
-  if (activeTab === "cliente-detalle") renderClienteDetalle(content);
-  if (activeTab === "compras") renderCompras(content);
-  if (activeTab === "auditoria") renderAuditoria(content);
-  if (activeTab === "todas-ventas") renderTodasVentas(content);
-  if (activeTab === "masopciones") renderMasOpciones(content);
-  if (activeTab === "reportes") renderReportes(content);
-  if (activeTab === "promociones") renderPromociones(content);
-  if (activeTab === "categorias") renderCategorias(content);
-  if (activeTab === "configuracion") renderConfiguracion(content);
-  if (activeTab === "perdidas") renderPerdidas(content);
-  if (activeTab === "reposicion") renderReposicion(content);
-  if (activeTab === "pedidos") renderPedidos(content);
-  if (activeTab === "analisis") renderAnalisis(content);
-  renderCartBar();
+  const pantallas = { dashboard: renderDashboard, ventas: renderVender, caja: renderCaja, inventario: renderInventario, proveedores: renderProveedores, clientes: renderClientes, "cliente-detalle": renderClienteDetalle, compras: renderCompras, auditoria: renderAuditoria, "todas-ventas": renderTodasVentas, masopciones: renderMasOpciones, reportes: renderReportes, promociones: renderPromociones, categorias: renderCategorias, configuracion: renderConfiguracion, perdidas: renderPerdidas, reposicion: renderReposicion, pedidos: renderPedidos, analisis: renderAnalisis };
+  const dibujar = pantallas[activeTab];
+  if (dibujar) aislar(activeTab, content, () => dibujar(content));
+  try { renderCartBar(); } catch (e) { console.error("renderCartBar", e); }
+}
+
+// Si una pantalla falla (al dibujarse o al cargar), solo esa pantalla muestra el aviso; el resto de la app sigue.
+function aislar(nombre, content, fn) {
+  const fallo = (e) => {
+    console.error("Pantalla " + nombre + " falló:", e);
+    content.innerHTML = `
+      <div class="bg-white rounded-2xl p-5 shadow-sm border border-black/[0.04] text-center mt-6">
+        <p class="text-[14px] font-semibold text-[#241C2E] mb-1">Esta sección tuvo un problema</p>
+        <p class="text-[12px] text-[#8a7d94] mb-4">El resto de la app sigue funcionando. Probá de nuevo o andá a otro menú.</p>
+        <button onclick="render()" class="bg-[#6B2D5C] text-white text-[13px] font-semibold rounded-xl px-5 py-2.5">Reintentar</button>
+      </div>`;
+  };
+  try { Promise.resolve(fn()).catch(fallo); } catch (e) { fallo(e); }
 }
 
 function renderDashboard(content) {
