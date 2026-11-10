@@ -4,9 +4,10 @@
   "private": true,
   "description": "Panel del negocio CG Dulces (ventas, caja, inventario, fiado, compras).",
   "scripts": {
+    "chequeo": "node scripts/chequeo.js",
+    "serve": "node scripts/servidor-local.js",
     "build:css": "tailwindcss -i ./css/input.css -o ./css/app.css --minify",
     "watch:css": "tailwindcss -i ./css/input.css -o ./css/app.css --watch",
-    "serve": "npx --yes serve -l 5173 .",
     "vendor": "node ./scripts/vendor.mjs"
   },
   "devDependencies": {

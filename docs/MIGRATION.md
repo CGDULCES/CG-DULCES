@@ -162,7 +162,7 @@ Verificar: `select * from public.backups_log order by created_at desc;`
 
 1. Dashboard → **Project Settings → API**.
 2. En la `anon` / `publishable` key → **Roll / Regenerate**.
-3. Copiá la nueva a `js/config.js` (`SUPABASE_KEY`) y publicá el repo.
+3. Copiá la nueva a `js/app/estado.js` (`SUPABASE_KEY`) y publicá el repo.
 4. La clave vieja queda muerta. Como ya hay RLS, aunque alguien la tuviera
    guardada, no puede hacer nada sin login.
 

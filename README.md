@@ -13,46 +13,62 @@ recetas/producción, promociones, pérdidas, reportes y auditoría.
 ## Estructura del repo
 
 ```
-index.html              App principal (UI + lógica actual)
+index.html              Solo la estructura de la pantalla (unas 150 líneas)
 offline.html            Pantalla "sin internet" (PWA)
 manifest.webmanifest    Metadatos para instalar como app
 sw.js                   Service Worker (abre offline, cachea el cascarón)
 
-assets/                 Logo e íconos (antes iban en base64 dentro del HTML)
-css/
-  input.css             Fuente de Tailwind (se compila a app.css)
-  app.css               CSS servido a producción (generado)
+assets/                 Logo e íconos
+css/sistema.css         Estilos propios (colores, pantalla completa, versión de computadora)
 js/
-  config.js             Conexión a Supabase (único lugar con la URL/clave)
   lib/util.js           Helpers: escape HTML, WhatsApp, CSV, cierre, errores
-  rpc.js                Envoltorio de las funciones transaccionales
+  rpc.js                Envoltorio de las funciones transaccionales de la base
   pwa.js                Registro del Service Worker + aviso sin-conexión
+  app/                  El sistema, dividido por partes (cada archivo es una parte):
+    tema.js             Configuración de Tailwind y colores guardados
+    estado.js           Conexión a Supabase (URL y clave pública) y listas de datos compartidas
+    marca.js            Paleta de colores, nombre y logo
+    base.js             Ventanas (modales), tablas de escritorio, historial, consultas
+    compartido.js       Cálculos que usan varias partes (stock de baldes, saldos, deudas)
+    datos.js            Carga de datos (cada carga es independiente)
+    sesion.js           Ingreso y salida
+    navegacion.js       Pestañas, dibujo de pantallas y aislamiento de errores
+    dashboard.js · caja.js · ventas.js · helados.js · dividir-cuenta.js
+    historial-ventas.js · clientes.js · cobros.js · compras.js · inventario.js
+    catalogos.js · informes.js · configuracion.js
+    inicio.js           Arranque (siempre se carga al final)
+
+pruebas/pantallas.js    Prueba de todas las pantallas y formularios (solo en la computadora local)
 
 supabase/
-  01_schema.sql         Tablas e índices (incluye tablas nuevas)
-  02_security.sql       Row Level Security + permisos + Storage
-  03_rpc.sql            Funciones transaccionales (venta, compra, cobro…)
-  04_triggers.sql       Historial de precios + lotes de vencimiento
-  05_views.sql          Vistas de análisis (rentabilidad, reposición…)
-  functions/backup/     Edge Function de copia de seguridad automática
+  01…18_*.sql           Estructura, seguridad, funciones y ajustes (APLICAR-TODO.sql reúne los primeros)
+  functions/            Funciones del servidor (cambiar-acceso)
 
-scripts/vendor.mjs      Baja copias locales de las librerías de CDN
-docs/                   MIGRATION.md · SECURITY.md · DE-CDN.md · ROADMAP.md
+scripts/
+  chequeo.js            Chequeo automático del código  →  node scripts/chequeo.js
+  servidor-local.js     Servidor para probar en tu computadora  →  node scripts/servidor-local.js
+  vendor.mjs            Baja copias locales de las librerías de CDN
+docs/                   MODULOS.md · SECURITY.md · MIGRATION.md · DE-CDN.md · ROADMAP.md
+```
+
+### Si una parte se rompe
+Cada pantalla se dibuja por separado y cada archivo es una parte: si uno falla, el sistema
+muestra un aviso solo en esa parte y el resto sigue funcionando. Para revisar el estado general:
+
+```bash
+node scripts/chequeo.js                      # revisa el código (sintaxis, botones, nombres repetidos, seguridad)
+node scripts/servidor-local.js               # y abrir http://localhost:5173/?prueba=1  → prueba todas las pantallas
 ```
 
 ---
 
 ## Puesta en marcha (desarrollo local)
 
-La app es estática. Cualquier servidor sirve, pero el **Service Worker** y el
-login necesitan `http://localhost` o HTTPS (no `file://`).
+La app es estática. Para probarla en tu computadora (el Service Worker y el login necesitan
+`http://localhost`, no `file://`):
 
 ```bash
-# Opción con Node
-npx serve -l 5173 .
-
-# Opción con Python
-python -m http.server 5173
+node scripts/servidor-local.js
 ```
 
 Abrí `http://localhost:5173`.
@@ -76,7 +92,7 @@ Resumen:
    activar "Confirm email".
 4. Crear los buckets de Storage (`02_security.sql` los crea; verificá).
 5. Deploy de la Edge Function `backup` y programarla (MIGRATION.md).
-6. **Rotar la anon key** y actualizar `js/config.js`.
+6. **Rotar la anon key** y actualizar `SUPABASE_KEY` en `js/app/estado.js`.
 
 ---
 

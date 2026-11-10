@@ -21,6 +21,10 @@ Sin uso hoy (heredadas): `fabricacion`, `fabricacion_insumos`, `gastos`, `pedido
 
 ## Cómo se aísla cada módulo
 
+- **Código:** el sistema está partido en archivos (`js/app/*.js`), uno por parte. Cada pantalla se busca
+  por nombre al dibujarla, así que si un archivo falla, solo esa pantalla muestra el aviso y el resto sigue.
+  Un cartelito rojo avisa cuando algo falla. Los cálculos que usan varias partes están en `compartido.js`.
+
 - **Base:** las escrituras de plata no se pueden hacer "a mano" desde el navegador; solo
   las funciones de arriba (que revisan stock, caja y saldos antes de tocar nada).
 - **App:** cada menú se dibuja por separado (`aislar()` en `index.html`). Si uno falla,

@@ -21,7 +21,7 @@
 - [ ] `03_rpc.sql` corrido — `select public.caja_abierta_id()` responde
 - [ ] Edge Function `backup` desplegada con `BACKUP_SECRET`
 - [ ] Cron `cg-backup-diario` activo — `select * from cron.job`
-- [ ] **anon key rotada** y `js/config.js` actualizado
+- [ ] **anon key rotada** y `js/app/estado.js` actualizado
 - [ ] `service_role` key: confirmá que **no** aparece en ningún archivo del repo
       (`git grep -i service_role` debe dar vacío)
 
@@ -41,6 +41,6 @@ Hoy hay **un solo login compartido**. El plan:
 ## Buenas prácticas que ya quedan en el repo
 
 - `.gitignore` excluye `.env`, `vendor/`, backups locales y `*.bak`.
-- La conexión vive en un solo archivo (`js/config.js`) con comentario de
+- La conexión vive en un solo archivo (`js/app/estado.js`) con comentario de
   advertencia sobre qué clave va y qué clave **no**.
 - El Service Worker **nunca** cachea llamadas a `supabase.co` (datos siempre frescos).

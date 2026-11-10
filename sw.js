@@ -15,7 +15,7 @@
  * detecta solo y actualiza. Si alguna vez hace falta forzar un refresco
  * total en todos los celulares, subí CACHE_VERSION.
  * ===================================================================== */
-const CACHE_VERSION = "cg-v12";
+const CACHE_VERSION = "cg-v13";
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 
@@ -24,9 +24,32 @@ const PRECACHE = [
   "./index.html",
   "./offline.html",
   "./manifest.webmanifest",
-  "./css/app.css",
+  "./css/sistema.css",
   "./js/lib/util.js",
+  "./js/rpc.js",
   "./js/pwa.js",
+  "./js/app/base.js",
+  "./js/app/caja.js",
+  "./js/app/catalogos.js",
+  "./js/app/clientes.js",
+  "./js/app/cobros.js",
+  "./js/app/compartido.js",
+  "./js/app/compras.js",
+  "./js/app/configuracion.js",
+  "./js/app/dashboard.js",
+  "./js/app/datos.js",
+  "./js/app/dividir-cuenta.js",
+  "./js/app/estado.js",
+  "./js/app/helados.js",
+  "./js/app/historial-ventas.js",
+  "./js/app/informes.js",
+  "./js/app/inicio.js",
+  "./js/app/inventario.js",
+  "./js/app/marca.js",
+  "./js/app/navegacion.js",
+  "./js/app/sesion.js",
+  "./js/app/tema.js",
+  "./js/app/ventas.js",
   "./assets/logo.png",
   "./assets/logo-mark.png",
   "./assets/icon-192.png",
